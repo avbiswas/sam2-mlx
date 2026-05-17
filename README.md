@@ -122,11 +122,11 @@ uv run python scripts/propagate_video_masks.py --frames 30
 SAM2 memory tracker:
 
 ```bash
-uv run python scripts/track_video_memory.py --frames 150 \
+uv run python scripts/track_video_memory.py --frames 289 \
   --point 500 610 \
-  --output-video outputs/dog_memory_overlay_150f_v2.mp4 \
-  --output-mask outputs/dog_memory_masks_150f_v2.npy \
-  --report outputs/benchmarks/dog_memory_latency_150f_v2.json
+  --output-video outputs/dog_memory_overlay_full_v3.mp4 \
+  --output-mask outputs/dog_memory_masks_full_v3.npy \
+  --report outputs/benchmarks/dog_memory_latency_full_v3.json
 ```
 
 The current memory tracker uses:
@@ -135,12 +135,32 @@ The current memory tracker uses:
 - SAM2 memory encoder
 - SAM2 memory attention
 - object pointers
-- up to the last six memory frames
+- the prompted conditioning frame plus up to the last six recent memory frames
 
-It is not yet a drop-in clone of Facebook's full `SAM2VideoPredictor` state
-machine. Missing higher-level behavior includes correction clicks,
-bidirectional propagation, multi-object consolidation, official conditioning
-frame selection, and exact full-video parity tests.
+The dog-gallery parity run compares MLX against the official Torch
+`SAM2VideoPredictor` output on all 289 frames:
+
+- Mean mask IoU over all frames: about `0.977`
+- Median mask IoU on non-empty Torch frames: about `0.979`
+- Presence match: `289 / 289` frames
+- Official Torch overlay: `outputs/torch_sam2_dog_overlay_full_twitter.mp4`
+- MLX overlay: `outputs/dog_memory_overlay_full_v3_twitter.mp4`
+- Comparison report: `outputs/benchmarks/dog_memory_mlx_vs_torch_full_v3.json`
+
+To regenerate the official Torch dog fixture:
+
+```bash
+uv run --extra torch-parity python scripts/run_torch_sam2_dog_video.py
+```
+
+To regenerate the MLX-vs-Torch dog comparison report:
+
+```bash
+uv run python scripts/compare_video_masks.py \
+  --reference outputs/torch_sam2_dog_masks_full.npy \
+  --candidate outputs/dog_memory_masks_full_v3.npy \
+  --output outputs/benchmarks/dog_memory_mlx_vs_torch_full_v3.json
+```
 
 ## Overlay Utility
 
@@ -148,7 +168,7 @@ Render masks onto a video:
 
 ```bash
 uv run python scripts/overlay_masks.py \
-  --masks outputs/dog_memory_masks_150f_v2.npy \
+  --masks outputs/dog_memory_masks_full_v3.npy \
   --output outputs/dog_memory_overlay_from_masks.mp4
 ```
 
@@ -187,7 +207,7 @@ Current indicative numbers on this machine:
 - MLX image encoder speedup: about `1.28x`
 - Cached prompt decode: about `4 ms`
 - Full image + prompt: about `85 ms`
-- Last-six-frame memory tracker: about `235 ms/frame` on the 150-frame run
+- Dog full-video memory tracker: about `269 ms/frame` on the 289-frame run
 
 Benchmark reports are written under:
 

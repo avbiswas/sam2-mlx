@@ -40,6 +40,7 @@ def main():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
+    cond_memories = []
     memories = []
     masks = []
     timings = []
@@ -57,22 +58,24 @@ def main():
                 multimask_output=True,
             )
         else:
-            conditioned = model.condition_with_memories(encoded, memories)
+            conditioned = model.condition_with_memories(encoded, memories, cond_memories=cond_memories)
             conditioned_encoded = dict(encoded)
             conditioned_encoded["vision_features"] = conditioned
-            out = model.predict_from_encoded(conditioned_encoded, None, None, multimask_output=False)
+            out = model.predict_from_encoded(conditioned_encoded, None, None, multimask_output=False, add_no_mem_embed=False)
 
         mx.eval(out["low_res_masks"], out["ious"], out["obj_ptr"], out["object_score_logits"])
         low, ious, best = best_low_mask(out)
         mem = model.encode_memory(encoded["vision_features"], mx.array(low), out["object_score_logits"])
         mx.eval(mem["vision_features"], mem["vision_pos_enc"])
-        memories.append(
-            {
-                "maskmem_features": mem["vision_features"],
-                "maskmem_pos_enc": mem["vision_pos_enc"][0],
-                "obj_ptr": out["obj_ptr"],
-            }
-        )
+        memory = {
+            "maskmem_features": mem["vision_features"],
+            "maskmem_pos_enc": mem["vision_pos_enc"][0],
+            "obj_ptr": out["obj_ptr"],
+        }
+        if frame_idx == 0:
+            cond_memories.append(memory)
+        else:
+            memories.append(memory)
 
         mask = cv2.resize(low[0, 0], (width, height), interpolation=cv2.INTER_LINEAR) > 0
         masks.append(mask.astype(np.float32))
@@ -86,7 +89,7 @@ def main():
     report = {
         **overlay,
         "mask_file": str(args.output_mask),
-        "method": "mlx_sam2_memory_last_6_frames",
+        "method": "mlx_sam2_memory_cond_plus_last_6_frames",
         "latency_ms": {
             "frames": len(timings),
             "mean": float(np.mean(timings)),

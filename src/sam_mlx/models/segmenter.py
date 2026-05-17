@@ -25,10 +25,17 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         projected = list(out["backbone_fpn"])
         high_res = self.sam_mask_decoder.project_high_res(projected)
         out["high_res_features"] = high_res
-        out["vision_features"] = out["vision_features"] + self.no_mem_embed.transpose(0, 2, 1).reshape(1, 256, 1, 1)
         return out
 
-    def predict_from_encoded(self, encoded: dict, point_coords: mx.array | None, point_labels: mx.array | None, mask_input: mx.array | None = None, multimask_output: bool = True) -> dict:
+    def predict_from_encoded(
+        self,
+        encoded: dict,
+        point_coords: mx.array | None,
+        point_labels: mx.array | None,
+        mask_input: mx.array | None = None,
+        multimask_output: bool = True,
+        add_no_mem_embed: bool = True,
+    ) -> dict:
         if point_coords is None or point_labels is None:
             batch = encoded["vision_features"].shape[0]
             point_coords = mx.zeros((batch, 1, 2), dtype=mx.float32)
@@ -36,8 +43,11 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         sparse, dense = self.sam_prompt_encoder(point_coords, point_labels, masks=None)
         if mask_input is not None:
             sparse, dense = self.sam_prompt_encoder(point_coords, point_labels, masks=mask_input)
+        image_embeddings = encoded["vision_features"]
+        if add_no_mem_embed:
+            image_embeddings = image_embeddings + self.no_mem_embed.transpose(0, 2, 1).reshape(1, 256, 1, 1)
         masks, ious, tokens, object_score_logits = self.sam_mask_decoder(
-            image_embeddings=encoded["vision_features"],
+            image_embeddings=image_embeddings,
             image_pe=self.sam_prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse,
             dense_prompt_embeddings=dense,
@@ -67,9 +77,12 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         return mem
 
     def condition_with_memory(self, encoded: dict, memory_features: mx.array, memory_pos: mx.array, obj_ptr: mx.array | None = None) -> mx.array:
-        return self.condition_with_memories(encoded, [{"maskmem_features": memory_features, "maskmem_pos_enc": memory_pos, "obj_ptr": obj_ptr}])
+        return self.condition_with_memories(
+            encoded,
+            cond_memories=[{"maskmem_features": memory_features, "maskmem_pos_enc": memory_pos, "obj_ptr": obj_ptr}],
+        )
 
-    def condition_with_memories(self, encoded: dict, memories: list[dict]) -> mx.array:
+    def condition_with_memories(self, encoded: dict, memories: list[dict] | None = None, cond_memories: list[dict] | None = None) -> mx.array:
         feat = encoded["vision_features"]
         pos = encoded["vision_pos_enc"][-1]
         seq = feat.reshape(feat.shape[0], feat.shape[1], -1).transpose(2, 0, 1)
@@ -77,7 +90,8 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         mem_parts = []
         pos_parts = []
         ptr_parts = []
-        for t_pos, memory in enumerate(reversed(memories[-6:]), start=1):
+
+        def append_memory(memory: dict, t_pos: int):
             memory_features = memory["maskmem_features"]
             memory_pos = memory["maskmem_pos_enc"]
             mem = memory_features.reshape(memory_features.shape[0], memory_features.shape[1], -1).transpose(2, 0, 1)
@@ -87,6 +101,16 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
             pos_parts.append(mem_pos)
             if memory.get("obj_ptr") is not None:
                 ptr_parts.append(memory["obj_ptr"])
+
+        for memory in cond_memories or []:
+            append_memory(memory, t_pos=0)
+
+        for t_pos, memory in enumerate(reversed((memories or [])[-6:]), start=1):
+            append_memory(memory, t_pos=t_pos)
+
+        if not mem_parts:
+            return feat + self.no_mem_embed.transpose(0, 2, 1).reshape(1, 256, 1, 1)
+
         mem = mx.concatenate(mem_parts, axis=0)
         mem_pos = mx.concatenate(pos_parts, axis=0)
         num_obj = 0
