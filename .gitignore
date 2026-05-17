@@ -1,0 +1,31 @@
+# Python-generated files
+hf_upload
+__pycache__
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.DS_Store
+
+# Virtual environments
+.venv
+
+# Local reference repositories and model artifacts
+third_party/
+references/
+checkpoints/
+
+# Generated benchmark and inference outputs
+outputs/
+benchmark_results/
+data/torch_image_embeddings.*
+data/torch_prompt_mask.*
+*.npy
+*.npz
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.mov
+*.avi
