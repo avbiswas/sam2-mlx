@@ -58,19 +58,20 @@ def main():
                 multimask_output=True,
             )
         else:
-            conditioned = model.condition_with_memories(encoded, memories, cond_memories=cond_memories)
+            conditioned = model.condition_with_memories(encoded, memories, cond_memories=cond_memories, current_frame_idx=frame_idx)
             conditioned_encoded = dict(encoded)
             conditioned_encoded["vision_features"] = conditioned
             out = model.predict_from_encoded(conditioned_encoded, None, None, multimask_output=False, add_no_mem_embed=False)
 
         mx.eval(out["low_res_masks"], out["ious"], out["obj_ptr"], out["object_score_logits"])
         low, ious, best = best_low_mask(out)
-        mem = model.encode_memory(encoded["vision_features"], mx.array(low), out["object_score_logits"])
+        mem = model.encode_memory(encoded["vision_features"], mx.array(low), out["object_score_logits"], is_mask_from_points=(frame_idx == 0))
         mx.eval(mem["vision_features"], mem["vision_pos_enc"])
         memory = {
             "maskmem_features": mem["vision_features"],
             "maskmem_pos_enc": mem["vision_pos_enc"][0],
             "obj_ptr": out["obj_ptr"],
+            "frame_idx": frame_idx,
         }
         if frame_idx == 0:
             cond_memories.append(memory)

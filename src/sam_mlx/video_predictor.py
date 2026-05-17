@@ -1,0 +1,417 @@
+from __future__ import annotations
+
+from collections import OrderedDict
+from pathlib import Path
+
+import cv2
+import mlx.core as mx
+import numpy as np
+from PIL import Image
+
+from sam_mlx.models import Sam2ImageSegmenter
+from sam_mlx.preprocess import preprocess_image
+from sam_mlx.weights import load_image_segmenter
+
+
+NO_OBJ_SCORE = -1024.0
+
+
+def _as_points(points) -> np.ndarray:
+    if points is None:
+        return np.zeros((0, 2), dtype=np.float32)
+    points = np.asarray(points, dtype=np.float32)
+    if points.ndim == 3:
+        points = points[0]
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise ValueError(f"Expected points with shape N,2 or 1,N,2; got {points.shape}")
+    return points
+
+
+def _as_labels(labels) -> np.ndarray:
+    if labels is None:
+        return np.zeros((0,), dtype=np.int32)
+    labels = np.asarray(labels, dtype=np.int32)
+    if labels.ndim == 2:
+        labels = labels[0]
+    if labels.ndim != 1:
+        raise ValueError(f"Expected labels with shape N or 1,N; got {labels.shape}")
+    return labels
+
+
+def _concat_points(old: dict | None, points: np.ndarray, labels: np.ndarray) -> dict:
+    if old is None:
+        return {"point_coords": points.astype(np.float32), "point_labels": labels.astype(np.int32)}
+    return {
+        "point_coords": np.concatenate([old["point_coords"], points.astype(np.float32)], axis=0),
+        "point_labels": np.concatenate([old["point_labels"], labels.astype(np.int32)], axis=0),
+    }
+
+
+def _load_video_frames(video_path: str | Path, image_size: int = 1024) -> tuple[np.ndarray, int, int]:
+    path = Path(video_path)
+    frames: list[Image.Image] = []
+    if path.is_dir():
+        files = sorted([*path.glob("*.jpg"), *path.glob("*.jpeg"), *path.glob("*.png")])
+        if not files:
+            raise ValueError(f"No image frames found in directory: {path}")
+        for file in files:
+            frames.append(Image.open(file).convert("RGB"))
+    else:
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            raise FileNotFoundError(f"Could not open video: {path}")
+        try:
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                frames.append(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+        finally:
+            cap.release()
+    if not frames:
+        raise ValueError(f"No frames decoded from video path: {path}")
+    width, height = frames[0].size
+    pixels = np.concatenate([preprocess_image(frame, image_size=image_size) for frame in frames], axis=0)
+    return pixels, height, width
+
+
+def _original_to_sam(points: np.ndarray, width: int, height: int, image_size: int = 1024) -> np.ndarray:
+    out = points.astype(np.float32).copy()
+    out[:, 0] *= image_size / width
+    out[:, 1] *= image_size / height
+    return out
+
+
+def _best_low_mask(out: dict) -> tuple[np.ndarray, int]:
+    low = np.array(out["low_res_masks"])
+    ious = np.array(out["ious"])
+    idx = int(np.argmax(ious[0])) if ious.shape[1] > 1 else 0
+    return low[:, idx : idx + 1], idx
+
+
+def _video_res_logits(low: np.ndarray, width: int, height: int) -> np.ndarray:
+    return cv2.resize(low[0, 0].astype(np.float32), (width, height), interpolation=cv2.INTER_LINEAR)[None, None]
+
+
+class SAM2VideoPredictor:
+    """MLX video predictor with the same public method names as Meta's SAM2VideoPredictor.
+
+    This class intentionally uses NumPy arrays for prompt inputs and returned mask logits
+    so the runtime package remains PyTorch-free.
+    """
+
+    image_size = 1024
+
+    def __init__(
+        self,
+        model: Sam2ImageSegmenter | None = None,
+        checkpoint: str | Path | None = None,
+        non_overlap_masks: bool = False,
+        clear_non_cond_mem_around_input: bool = False,
+        add_all_frames_to_correct_as_cond: bool = False,
+        **_: object,
+    ):
+        if model is None:
+            if checkpoint is None:
+                checkpoint = Path("checkpoints/sam2.1_hiera_small_image_segmenter.safetensors")
+            model = load_image_segmenter(checkpoint)
+        self.model = model
+        self.non_overlap_masks = non_overlap_masks
+        self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
+        self.add_all_frames_to_correct_as_cond = add_all_frames_to_correct_as_cond
+
+    @classmethod
+    def from_pretrained(cls, model_id: str, **kwargs) -> "SAM2VideoPredictor":
+        path = Path(model_id)
+        if path.exists():
+            return cls(checkpoint=path, **kwargs)
+        from huggingface_hub import hf_hub_download
+
+        filename = kwargs.pop("filename", "sam2.1_hiera_small_image_segmenter.safetensors")
+        checkpoint = hf_hub_download(repo_id=model_id, filename=filename)
+        return cls(checkpoint=checkpoint, **kwargs)
+
+    def init_state(
+        self,
+        video_path,
+        offload_video_to_cpu: bool = False,
+        offload_state_to_cpu: bool = False,
+        async_loading_frames: bool = False,
+    ) -> dict:
+        pixels, video_height, video_width = _load_video_frames(video_path, image_size=self.image_size)
+        state = {
+            "images": pixels,
+            "num_frames": int(pixels.shape[0]),
+            "offload_video_to_cpu": offload_video_to_cpu,
+            "offload_state_to_cpu": offload_state_to_cpu,
+            "async_loading_frames": async_loading_frames,
+            "video_height": video_height,
+            "video_width": video_width,
+            "cached_features": {},
+            "constants": {},
+            "obj_id_to_idx": OrderedDict(),
+            "obj_idx_to_id": OrderedDict(),
+            "obj_ids": [],
+            "point_inputs_per_obj": {},
+            "mask_inputs_per_obj": {},
+            "output_dict_per_obj": {},
+            "temp_output_dict_per_obj": {},
+            "frames_tracked_per_obj": {},
+        }
+        self._get_image_feature(state, 0)
+        return state
+
+    def _obj_id_to_idx(self, inference_state: dict, obj_id: int) -> int:
+        obj_idx = inference_state["obj_id_to_idx"].get(obj_id)
+        if obj_idx is not None:
+            return obj_idx
+        obj_idx = len(inference_state["obj_id_to_idx"])
+        inference_state["obj_id_to_idx"][obj_id] = obj_idx
+        inference_state["obj_idx_to_id"][obj_idx] = obj_id
+        inference_state["obj_ids"] = list(inference_state["obj_id_to_idx"])
+        inference_state["point_inputs_per_obj"][obj_idx] = {}
+        inference_state["mask_inputs_per_obj"][obj_idx] = {}
+        inference_state["output_dict_per_obj"][obj_idx] = {"cond_frame_outputs": {}, "non_cond_frame_outputs": {}}
+        inference_state["temp_output_dict_per_obj"][obj_idx] = {"cond_frame_outputs": {}, "non_cond_frame_outputs": {}}
+        inference_state["frames_tracked_per_obj"][obj_idx] = {}
+        return obj_idx
+
+    def _get_image_feature(self, inference_state: dict, frame_idx: int) -> dict:
+        cached = inference_state["cached_features"].get(frame_idx)
+        if cached is not None:
+            return cached
+        encoded = self.model.encode_image(mx.array(inference_state["images"][frame_idx : frame_idx + 1]))
+        inference_state["cached_features"] = {frame_idx: encoded}
+        return encoded
+
+    def _encode_memory(self, encoded: dict, low: np.ndarray, out: dict, frame_idx: int, is_mask_from_points: bool) -> dict:
+        mem = self.model.encode_memory(encoded["vision_features"], mx.array(low), out["object_score_logits"], is_mask_from_points=is_mask_from_points)
+        mx.eval(mem["vision_features"], mem["vision_pos_enc"])
+        return {
+            "maskmem_features": mem["vision_features"],
+            "maskmem_pos_enc": mem["vision_pos_enc"][0],
+            "obj_ptr": out["obj_ptr"],
+            "frame_idx": frame_idx,
+        }
+
+    def _predict_initial(self, encoded: dict, points: np.ndarray, labels: np.ndarray) -> dict:
+        out = self.model.predict_from_encoded(
+            encoded,
+            mx.array(points[None].astype(np.float32)),
+            mx.array(labels[None].astype(np.int32)),
+            multimask_output=True,
+        )
+        mx.eval(out["low_res_masks"], out["ious"], out["obj_ptr"], out["object_score_logits"])
+        return out
+
+    def _predict_tracked(
+        self,
+        encoded: dict,
+        obj_output_dict: dict,
+        frame_idx: int,
+        point_inputs: dict | None = None,
+        prev_low: np.ndarray | None = None,
+        reverse: bool = False,
+    ) -> dict:
+        cond = list(obj_output_dict["cond_frame_outputs"].values())
+        mem = list(obj_output_dict["non_cond_frame_outputs"].values())
+        conditioned = self.model.condition_with_memories(encoded, mem, cond_memories=cond, current_frame_idx=frame_idx, track_in_reverse=reverse)
+        conditioned_encoded = dict(encoded)
+        conditioned_encoded["vision_features"] = conditioned
+        if point_inputs is None:
+            coords = labels = None
+        else:
+            coords = mx.array(point_inputs["point_coords"][None].astype(np.float32))
+            labels = mx.array(point_inputs["point_labels"][None].astype(np.int32))
+        out = self.model.predict_from_encoded(
+            conditioned_encoded,
+            coords,
+            labels,
+            mask_input=mx.array(prev_low.astype(np.float32)) if prev_low is not None else None,
+            multimask_output=False,
+            add_no_mem_embed=False,
+        )
+        mx.eval(out["low_res_masks"], out["ious"], out["obj_ptr"], out["object_score_logits"])
+        return out
+
+    def _run_single_frame_inference(
+        self,
+        inference_state: dict,
+        obj_idx: int,
+        frame_idx: int,
+        is_init_cond_frame: bool,
+        point_inputs: dict | None,
+        reverse: bool,
+        prev_low: np.ndarray | None = None,
+        run_mem_encoder: bool = True,
+    ) -> dict:
+        encoded = self._get_image_feature(inference_state, frame_idx)
+        obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
+        if is_init_cond_frame and point_inputs is not None and prev_low is None:
+            out = self._predict_initial(encoded, point_inputs["point_coords"], point_inputs["point_labels"])
+        else:
+            out = self._predict_tracked(encoded, obj_output_dict, frame_idx, point_inputs=point_inputs, prev_low=prev_low, reverse=reverse)
+        low, _ = _best_low_mask(out)
+        current_out = {
+            "pred_masks": low,
+            "obj_ptr": out["obj_ptr"],
+            "object_score_logits": out["object_score_logits"],
+            "maskmem_features": None,
+            "maskmem_pos_enc": None,
+        }
+        if run_mem_encoder:
+            memory = self._encode_memory(encoded, low, out, frame_idx, is_mask_from_points=(point_inputs is not None))
+            current_out.update(memory)
+        return current_out
+
+    def _output_masks(self, inference_state: dict, outputs_by_obj: list[dict | None]) -> np.ndarray:
+        h = inference_state["video_height"]
+        w = inference_state["video_width"]
+        masks = np.full((len(outputs_by_obj), 1, h, w), NO_OBJ_SCORE, dtype=np.float32)
+        for idx, out in enumerate(outputs_by_obj):
+            if out is not None:
+                masks[idx] = _video_res_logits(out["pred_masks"], w, h)
+        if self.non_overlap_masks and masks.shape[0] > 1:
+            winners = np.argmax(masks[:, 0], axis=0)
+            for idx in range(masks.shape[0]):
+                masks[idx, 0] = np.where(winners == idx, masks[idx, 0], np.minimum(masks[idx, 0], -10.0))
+        return masks
+
+    def add_new_points_or_box(
+        self,
+        inference_state: dict,
+        frame_idx: int,
+        obj_id: int,
+        points=None,
+        labels=None,
+        clear_old_points: bool = True,
+        normalize_coords: bool = True,
+        box=None,
+    ):
+        obj_idx = self._obj_id_to_idx(inference_state, obj_id)
+        points = _as_points(points)
+        labels = _as_labels(labels)
+        if box is not None:
+            if not clear_old_points:
+                raise ValueError("cannot add box without clearing old points")
+            box_arr = np.asarray(box, dtype=np.float32).reshape(2, 2)
+            points = np.concatenate([box_arr, points], axis=0)
+            labels = np.concatenate([np.array([2, 3], dtype=np.int32), labels], axis=0)
+        if points.shape[0] == 0:
+            raise ValueError("at least one of points or box must be provided as input")
+        if normalize_coords:
+            points = _original_to_sam(points, inference_state["video_width"], inference_state["video_height"], self.image_size)
+        point_inputs_per_frame = inference_state["point_inputs_per_obj"][obj_idx]
+        old = None if clear_old_points else point_inputs_per_frame.get(frame_idx)
+        point_inputs = _concat_points(old, points, labels)
+        point_inputs_per_frame[frame_idx] = point_inputs
+        inference_state["mask_inputs_per_obj"][obj_idx].pop(frame_idx, None)
+
+        tracked = inference_state["frames_tracked_per_obj"][obj_idx]
+        is_init_cond_frame = frame_idx not in tracked
+        reverse = False if is_init_cond_frame else tracked[frame_idx]["reverse"]
+        is_cond = is_init_cond_frame or self.add_all_frames_to_correct_as_cond
+        storage_key = "cond_frame_outputs" if is_cond else "non_cond_frame_outputs"
+        obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
+        prev_out = obj_output_dict["cond_frame_outputs"].get(frame_idx) or obj_output_dict["non_cond_frame_outputs"].get(frame_idx)
+        prev_low = np.clip(prev_out["pred_masks"], -32.0, 32.0) if prev_out is not None else None
+        out = self._run_single_frame_inference(inference_state, obj_idx, frame_idx, is_init_cond_frame, point_inputs, reverse, prev_low=prev_low, run_mem_encoder=True)
+        obj_output_dict[storage_key][frame_idx] = out
+        if storage_key == "cond_frame_outputs":
+            obj_output_dict["non_cond_frame_outputs"].pop(frame_idx, None)
+        return frame_idx, inference_state["obj_ids"], self._output_masks(inference_state, [self._output_for_obj(inference_state, idx, frame_idx) for idx in range(len(inference_state["obj_ids"]))])
+
+    def add_new_points(self, *args, **kwargs):
+        return self.add_new_points_or_box(*args, **kwargs)
+
+    def add_new_mask(self, inference_state: dict, frame_idx: int, obj_id: int, mask):
+        obj_idx = self._obj_id_to_idx(inference_state, obj_id)
+        mask = np.asarray(mask, dtype=np.float32)
+        if mask.ndim != 2:
+            raise ValueError(f"Expected mask with shape H,W; got {mask.shape}")
+        low = cv2.resize(mask, (256, 256), interpolation=cv2.INTER_LINEAR)[None, None]
+        low = np.where(low >= 0.5, 20.0, -20.0).astype(np.float32)
+        encoded = self._get_image_feature(inference_state, frame_idx)
+        out = {"low_res_masks": mx.array(low), "obj_ptr": self.model.no_obj_ptr, "object_score_logits": mx.ones((1, 1))}
+        memory = self._encode_memory(encoded, low, out, frame_idx, is_mask_from_points=True)
+        current_out = {"pred_masks": low, "object_score_logits": out["object_score_logits"], "obj_ptr": out["obj_ptr"], **memory}
+        tracked = inference_state["frames_tracked_per_obj"][obj_idx]
+        is_cond = frame_idx not in tracked or self.add_all_frames_to_correct_as_cond
+        storage_key = "cond_frame_outputs" if is_cond else "non_cond_frame_outputs"
+        inference_state["output_dict_per_obj"][obj_idx][storage_key][frame_idx] = current_out
+        inference_state["point_inputs_per_obj"][obj_idx].pop(frame_idx, None)
+        inference_state["mask_inputs_per_obj"][obj_idx][frame_idx] = low
+        return frame_idx, inference_state["obj_ids"], self._output_masks(inference_state, [self._output_for_obj(inference_state, idx, frame_idx) for idx in range(len(inference_state["obj_ids"]))])
+
+    def _output_for_obj(self, inference_state: dict, obj_idx: int, frame_idx: int) -> dict | None:
+        out_dict = inference_state["output_dict_per_obj"][obj_idx]
+        return out_dict["cond_frame_outputs"].get(frame_idx) or out_dict["non_cond_frame_outputs"].get(frame_idx)
+
+    def propagate_in_video(self, inference_state: dict, start_frame_idx=None, max_frame_num_to_track=None, reverse: bool = False):
+        if not inference_state["obj_ids"]:
+            raise RuntimeError("No input points or masks are provided for any object")
+        if start_frame_idx is None:
+            start_frame_idx = min(
+                frame
+                for out_dict in inference_state["output_dict_per_obj"].values()
+                for frame in out_dict["cond_frame_outputs"]
+            )
+        if max_frame_num_to_track is None:
+            max_frame_num_to_track = inference_state["num_frames"]
+        if reverse:
+            end = max(start_frame_idx - max_frame_num_to_track, 0)
+            order = range(start_frame_idx, end - 1, -1) if start_frame_idx > 0 else []
+        else:
+            end = min(start_frame_idx + max_frame_num_to_track, inference_state["num_frames"] - 1)
+            order = range(start_frame_idx, end + 1)
+
+        for frame_idx in order:
+            outputs: list[dict | None] = []
+            for obj_idx in range(len(inference_state["obj_ids"])):
+                obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
+                if frame_idx in obj_output_dict["cond_frame_outputs"]:
+                    out = obj_output_dict["cond_frame_outputs"][frame_idx]
+                else:
+                    out = self._run_single_frame_inference(inference_state, obj_idx, frame_idx, False, None, reverse, run_mem_encoder=True)
+                    obj_output_dict["non_cond_frame_outputs"][frame_idx] = out
+                inference_state["frames_tracked_per_obj"][obj_idx][frame_idx] = {"reverse": reverse}
+                outputs.append(out)
+            yield frame_idx, inference_state["obj_ids"], self._output_masks(inference_state, outputs)
+
+    def clear_all_prompts_in_frame(self, inference_state: dict, frame_idx: int, obj_id: int, need_output: bool = True):
+        obj_idx = self._obj_id_to_idx(inference_state, obj_id)
+        inference_state["point_inputs_per_obj"][obj_idx].pop(frame_idx, None)
+        inference_state["mask_inputs_per_obj"][obj_idx].pop(frame_idx, None)
+        out_dict = inference_state["output_dict_per_obj"][obj_idx]
+        out = out_dict["cond_frame_outputs"].pop(frame_idx, None)
+        if out is not None:
+            out_dict["non_cond_frame_outputs"][frame_idx] = out
+            inference_state["frames_tracked_per_obj"][obj_idx].pop(frame_idx, None)
+        if not need_output:
+            return None
+        return frame_idx, inference_state["obj_ids"], self._output_masks(inference_state, [self._output_for_obj(inference_state, idx, frame_idx) for idx in range(len(inference_state["obj_ids"]))])
+
+    def reset_state(self, inference_state: dict) -> None:
+        self._reset_tracking_results(inference_state)
+        inference_state["obj_id_to_idx"].clear()
+        inference_state["obj_idx_to_id"].clear()
+        inference_state["obj_ids"].clear()
+        inference_state["point_inputs_per_obj"].clear()
+        inference_state["mask_inputs_per_obj"].clear()
+        inference_state["output_dict_per_obj"].clear()
+        inference_state["temp_output_dict_per_obj"].clear()
+        inference_state["frames_tracked_per_obj"].clear()
+
+    def _reset_tracking_results(self, inference_state: dict) -> None:
+        for value in inference_state["point_inputs_per_obj"].values():
+            value.clear()
+        for value in inference_state["mask_inputs_per_obj"].values():
+            value.clear()
+        for value in inference_state["output_dict_per_obj"].values():
+            value["cond_frame_outputs"].clear()
+            value["non_cond_frame_outputs"].clear()
+        for value in inference_state["temp_output_dict_per_obj"].values():
+            value["cond_frame_outputs"].clear()
+            value["non_cond_frame_outputs"].clear()
+        for value in inference_state["frames_tracked_per_obj"].values():
+            value.clear()

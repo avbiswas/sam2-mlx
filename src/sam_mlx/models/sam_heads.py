@@ -208,6 +208,9 @@ class MaskDecoder(nn.Module):
         self.output_hypernetworks_mlps = [SamMLP(256, 256, 32, 3) for _ in range(4)]
         self.iou_prediction_head = SamMLP(256, 256, 4, 3, sigmoid_output=True)
         self.pred_obj_score_head = SamMLP(256, 256, 1, 3)
+        self.dynamic_multimask_via_stability = True
+        self.dynamic_multimask_stability_delta = 0.05
+        self.dynamic_multimask_stability_thresh = 0.98
 
     def project_high_res(self, fpn: list[mx.array]) -> list[mx.array]:
         feat_s0 = self.conv_s0(fpn[0].transpose(0, 2, 3, 1)).transpose(0, 3, 1, 2)
@@ -239,6 +242,28 @@ class MaskDecoder(nn.Module):
         object_score_logits = self.pred_obj_score_head(hs[:, 0, :])
         return masks, iou_pred, mask_tokens_out, object_score_logits
 
+    def _stability_scores(self, masks: mx.array) -> mx.array:
+        flat = masks.reshape(*masks.shape[:2], -1)
+        area_i = mx.sum(flat > self.dynamic_multimask_stability_delta, axis=-1).astype(mx.float32)
+        area_u = mx.sum(flat > -self.dynamic_multimask_stability_delta, axis=-1).astype(mx.float32)
+        return mx.where(area_u > 0, area_i / area_u, mx.ones_like(area_u))
+
+    def _dynamic_multimask(self, masks: mx.array, iou_pred: mx.array) -> tuple[mx.array, mx.array]:
+        multimask_logits = masks[:, 1:, :, :]
+        multimask_iou = iou_pred[:, 1:]
+        best = mx.argmax(multimask_iou, axis=-1)
+        one_hot = mx.equal(mx.arange(multimask_logits.shape[1])[None, :], best[:, None]).astype(masks.dtype)
+        best_logits = mx.sum(multimask_logits * one_hot[:, :, None, None], axis=1, keepdims=True)
+        best_iou = mx.sum(multimask_iou * one_hot, axis=1, keepdims=True)
+
+        single_logits = masks[:, 0:1, :, :]
+        single_iou = iou_pred[:, 0:1]
+        stable = self._stability_scores(single_logits) >= self.dynamic_multimask_stability_thresh
+        return (
+            mx.where(stable[:, :, None, None], single_logits, best_logits),
+            mx.where(stable, single_iou, best_iou),
+        )
+
     def __call__(self, image_embeddings: mx.array, image_pe: mx.array, sparse_prompt_embeddings: mx.array, dense_prompt_embeddings: mx.array, multimask_output: bool, high_res_features: list[mx.array]) -> tuple[mx.array, mx.array, mx.array, mx.array]:
         masks, iou_pred, mask_tokens_out, object_score_logits = self.predict_masks(image_embeddings, image_pe, sparse_prompt_embeddings, dense_prompt_embeddings, high_res_features)
         is_obj = object_score_logits > 0
@@ -247,6 +272,9 @@ class MaskDecoder(nn.Module):
             masks_out = masks[:, 1:, :, :]
             iou_out = iou_pred[:, 1:]
             sam_tokens = mask_tokens_out[:, 1:]
+        elif self.dynamic_multimask_via_stability:
+            masks_out, iou_out = self._dynamic_multimask(masks, iou_pred)
+            sam_tokens = mask_tokens_out[:, 0:1]
         else:
             masks_out = masks[:, 0:1, :, :]
             iou_out = iou_pred[:, 0:1]

@@ -129,13 +129,53 @@ uv run python scripts/track_video_memory.py --frames 289 \
   --report outputs/benchmarks/dog_memory_latency_full_v3.json
 ```
 
+Package API, matching the official SAM2 video predictor method names:
+
+```python
+import numpy as np
+
+from sam_mlx import SAM2VideoPredictor
+
+predictor = SAM2VideoPredictor(
+    checkpoint="checkpoints/sam2.1_hiera_small_image_segmenter.safetensors"
+)
+state = predictor.init_state("third_party/sam2/demo/data/gallery/01_dog.mp4")
+
+frame_idx, obj_ids, masks = predictor.add_new_points_or_box(
+    state,
+    frame_idx=0,
+    obj_id=1,
+    points=np.array([[625.0, 429.0]], dtype=np.float32),
+    labels=np.array([1], dtype=np.int32),
+)
+
+for frame_idx, obj_ids, masks in predictor.propagate_in_video(state):
+    # masks is a NumPy float32 array shaped O,1,H,W in original video resolution.
+    pass
+```
+
+Implemented API methods:
+
+- `SAM2VideoPredictor.from_pretrained(...)`
+- `init_state(...)`
+- `add_new_points_or_box(...)`
+- `add_new_points(...)`
+- `add_new_mask(...)`
+- `propagate_in_video(...)`
+- `clear_all_prompts_in_frame(...)`
+- `reset_state(...)`
+
 The current memory tracker uses:
 
 - first-frame point prompt
 - SAM2 memory encoder
 - SAM2 memory attention
 - object pointers
-- the prompted conditioning frame plus up to the last six recent memory frames
+- dynamic multimask fallback on unstable single-mask tracking outputs
+- conditioning-frame memory plus SAM2-style frame-indexed temporal memory
+  selection
+- click-frame masks binarized before memory encoding, matching the official
+  postprocessing path
 
 The dog-gallery parity run compares MLX against the official Torch
 `SAM2VideoPredictor` output on all 289 frames:
@@ -160,6 +200,109 @@ uv run python scripts/compare_video_masks.py \
   --reference outputs/torch_sam2_dog_masks_full.npy \
   --candidate outputs/dog_memory_masks_full_v3.npy \
   --output outputs/benchmarks/dog_memory_mlx_vs_torch_full_v3.json
+```
+
+## Feature Parity Benchmarks
+
+Generate official Torch fixtures for the video UX/state features we still need
+to replicate:
+
+```bash
+uv run --extra torch-parity python scripts/run_torch_video_feature_benchmarks.py \
+  --scenario all \
+  --frames 130 \
+  --frames-dir outputs/torch_feature_benchmark_frames_130f \
+  --output-dir outputs/feature_benchmarks_130f
+```
+
+This writes `T,O,H,W` mask fixtures and per-scenario reports for:
+
+- `multi_object`
+- `box_prompt`
+- `negative_clicks`
+- `cross_frame_corrections`
+- `bidirectional_middle`
+
+The current generated fixture summary is:
+
+```text
+outputs/feature_benchmarks_130f/torch_feature_benchmarks_summary.json
+```
+
+Run MLX and compare every tracked feature against the Torch fixtures:
+
+```bash
+uv run python scripts/run_feature_regression.py --frames 130
+```
+
+To regenerate Torch fixtures first, use:
+
+```bash
+uv run python scripts/run_feature_regression.py --refresh-torch --frames 130
+```
+
+During inner-loop work, compare existing outputs without rerunning MLX:
+
+```bash
+uv run python scripts/run_feature_regression.py --skip-mlx --frames 130
+```
+
+Use the same comparator directly for a single scenario:
+
+```bash
+uv run python scripts/track_video_features_mlx.py \
+  --scenario multi_object \
+  --frames 130 \
+  --output-dir outputs/feature_benchmarks_130f
+
+uv run python scripts/compare_video_masks.py \
+  --reference outputs/feature_benchmarks_130f/multi_object_torch_masks.npy \
+  --candidate outputs/feature_benchmarks_130f/multi_object_mlx_masks.npy \
+  --output outputs/feature_benchmarks_130f/multi_object_mlx_vs_torch.json
+```
+
+Current MLX-vs-Torch feature benchmark results on the 130-frame dog-gallery
+fixture:
+
+- `multi_object`: mean IoU `0.973`, presence `260 / 260`
+- `box_prompt`: mean IoU `0.953`, presence `129 / 130`
+- `negative_clicks`: mean IoU `0.972`, presence `130 / 130`
+- `cross_frame_corrections`: mean IoU `0.974`, presence `130 / 130`
+- `bidirectional_middle`: mean IoU `0.924`, presence `128 / 130`
+
+The bidirectional case is currently functionally correct but still below the
+other scenarios. The remaining mismatch is a two-frame object-presence boundary
+near occlusion: Torch keeps tiny masks on frames 76-77, while MLX gates those
+frames as no-object.
+
+On another gallery video, `02_cups.mp4`, the same bidirectional benchmark with a
+center-cup prompt at frame 120 is substantially tighter:
+
+- `bidirectional_middle` on cups: mean IoU `0.979`, presence `130 / 130`
+- Report: `outputs/cups_feature_benchmarks_130f/bidirectional_middle_mlx_vs_torch.json`
+- Overlay: `outputs/cups_feature_benchmarks_130f/bidirectional_middle_mlx_overlay.mp4`
+
+The MLX feature runner now uses a shared video state for multiple objects. It
+encodes each frame once, keeps per-object conditioning/non-conditioning memory
+banks, and supports NLE-style correction replay:
+
+- forward replay from a correction frame for positive/negative click edits
+- bidirectional replay from a middle-frame correction
+- preserved masks outside the edited replay range
+
+An MLX-only inspection scenario for middle-frame editor correction is available:
+
+```bash
+uv run python scripts/track_video_features_mlx.py \
+  --scenario nle_bidirectional_correction \
+  --frames 90 \
+  --output-dir outputs/feature_benchmarks_130f
+```
+
+Feature reports and inspection overlays are written under:
+
+```text
+outputs/feature_benchmarks_130f/
 ```
 
 ## Overlay Utility

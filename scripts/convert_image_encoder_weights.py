@@ -131,6 +131,8 @@ def main():
     for layer in range(3):
         weights[f"obj_ptr_proj.layers.{layer}.weight"] = tensor(sd, f"obj_ptr_proj.layers.{layer}.weight")
         weights[f"obj_ptr_proj.layers.{layer}.bias"] = tensor(sd, f"obj_ptr_proj.layers.{layer}.bias")
+    weights["obj_ptr_tpos_proj.weight"] = tensor(sd, "obj_ptr_tpos_proj.weight")
+    weights["obj_ptr_tpos_proj.bias"] = tensor(sd, "obj_ptr_tpos_proj.bias")
 
     me = "memory_encoder"
     out = "memory_encoder"
