@@ -11,6 +11,7 @@ from mlx_sam.models.sam_heads import MaskDecoder, PromptEncoder, SamMLP
 class Sam2ImageSegmenter(Sam2ImageEncoder):
     def __init__(self, config: Sam2ImageEncoderConfig = SAM2_1_HIERA_SMALL_IMAGE_ENCODER):
         super().__init__(config=config)
+        self.image_size = 1024
         self.sam_prompt_encoder = PromptEncoder()
         self.sam_mask_decoder = MaskDecoder()
         self.memory_encoder = MemoryEncoder()
@@ -27,6 +28,17 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         self.memory_temporal_stride_for_eval = 1
         self.max_cond_frames_in_attn = -1
         self.memory_attention_dtype = None
+
+    def set_image_size(self, image_size: int) -> None:
+        image_size = int(image_size)
+        if image_size % 16 != 0:
+            raise ValueError(f"SAM2 image_size must be divisible by 16, got {image_size}")
+        self.image_size = image_size
+        embedding = image_size // 16
+        self.sam_prompt_encoder.image_embedding_size = (embedding, embedding)
+        self.sam_prompt_encoder.input_image_size = (image_size, image_size)
+        self.sam_prompt_encoder.mask_input_size = (image_size // 4, image_size // 4)
+        self.sam_prompt_encoder._dense_pe_cache = None
 
     def encode_image(self, pixels: mx.array) -> dict:
         out = super().__call__(pixels)
@@ -84,7 +96,7 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         return obj_ptr + (1 - is_obj) * self.no_obj_ptr
 
     def encode_memory(self, vision_features: mx.array, low_res_mask: mx.array, object_score_logits: mx.array, is_mask_from_points: bool = False) -> dict:
-        high_res = upsample_mask(low_res_mask.astype(mx.float32), (1024, 1024))
+        high_res = upsample_mask(low_res_mask.astype(mx.float32), (self.image_size, self.image_size))
         if is_mask_from_points:
             mask_for_mem = (high_res > 0).astype(mx.float32)
         else:

@@ -4,8 +4,10 @@ import time
 from pathlib import Path
 
 import cv2
+import mlx.core as mx
 import numpy as np
 
+from mlx_sam.models.memory import upsample_mask
 from mlx_sam.overlay import write_mask_overlay_video
 from mlx_sam.video_predictor import SAM2VideoPredictor
 
@@ -46,11 +48,24 @@ def parse_points(values: list[float]) -> np.ndarray:
     return np.array(values, dtype=np.float32).reshape(-1, 2)
 
 
+def upsample_binary_masks_mlx(lowres_logits: list[mx.array], height: int, width: int, batch_size: int) -> np.ndarray:
+    masks = []
+    batch_size = max(1, int(batch_size))
+    for start in range(0, len(lowres_logits), batch_size):
+        batch = mx.concatenate(lowres_logits[start : start + batch_size], axis=0)
+        logits = upsample_mask(batch, (height, width))
+        binary = (logits[:, 0] > 0).astype(mx.float32)
+        mx.eval(binary)
+        masks.append(np.array(binary))
+    return np.concatenate(masks, axis=0)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Benchmark MLX SAM2 video propagation with memory.")
     parser.add_argument("--video", type=Path, default=ROOT / "third_party/sam2/demo/data/gallery/01_dog.mp4")
     parser.add_argument("--model-id", default="facebook/sam2.1-hiera-small")
     parser.add_argument("--weights", type=Path, default=ROOT / "checkpoints/sam2.1_hiera_small_image_segmenter.safetensors")
+    parser.add_argument("--image-size", type=int, default=1024)
     parser.add_argument("--frames-dir", type=Path, default=ROOT / "outputs/video_memory_multiclick/frames")
     parser.add_argument("--frames", type=int, help="Optional frame limit. Omit to use the full video.")
     parser.add_argument("--points", nargs="+", type=float, default=[625.0, 429.0, 700.0, 470.0, 300.0, 250.0, 950.0, 610.0])
@@ -64,6 +79,8 @@ def main():
     parser.add_argument("--skip-save", action="store_true")
     parser.add_argument("--skip-overlay", action="store_true")
     parser.add_argument("--raw-propagation", action="store_true", help="Skip public video-resolution mask materialization during propagation.")
+    parser.add_argument("--defer-mask-upsampling", action="store_true", help="Collect low-res logits during propagation and batch-upsample masks at the end.")
+    parser.add_argument("--postprocess-batch-size", type=int, default=16)
     parser.add_argument("--output-mask", type=Path, default=ROOT / "outputs/video_memory_multiclick/mlx_masks.npy")
     parser.add_argument("--output-video", type=Path, default=ROOT / "outputs/video_memory_multiclick/mlx_overlay.mp4")
     parser.add_argument("--report", type=Path, default=ROOT / "outputs/benchmarks/video_memory_multiclick_mlx.json")
@@ -83,6 +100,7 @@ def main():
     predictor = SAM2VideoPredictor(
         checkpoint=args.weights,
         model_id=args.model_id,
+        image_size=args.image_size,
         memory_dtype=memory_dtype,
         memory_attention_dtype=memory_attention_dtype,
         num_maskmem=args.num_maskmem,
@@ -109,21 +127,40 @@ def main():
     prompt_ms = (time.perf_counter() - prompt_start) * 1000.0
 
     masks_by_frame: dict[int, np.ndarray] = {}
+    lowres_by_frame: dict[int, mx.array] = {}
     frame_latencies = []
     prop_start = time.perf_counter()
     last = prop_start
-    for out_frame_idx, _out_obj_ids, out_mask_logits in predictor.propagate_in_video(state, return_masks=not args.raw_propagation):
+    return_masks = not args.raw_propagation and not args.defer_mask_upsampling
+    for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(state, return_masks=return_masks):
         now = time.perf_counter()
         frame_latencies.append((now - last) * 1000.0)
         last = now
-        if out_mask_logits is not None and not args.skip_save:
+        if args.defer_mask_upsampling and not args.skip_save:
+            obj_idx = state["obj_id_to_idx"][out_obj_ids[0]]
+            out_dict = state["output_dict_per_obj"][obj_idx]
+            out = out_dict["cond_frame_outputs"].get(int(out_frame_idx)) or out_dict["non_cond_frame_outputs"][int(out_frame_idx)]
+            lowres_by_frame[int(out_frame_idx)] = out["pred_masks"]
+        elif out_mask_logits is not None and not args.skip_save:
             masks_by_frame[int(out_frame_idx)] = (out_mask_logits[0, 0] > 0).astype(np.float32)
     propagate_ms = (time.perf_counter() - prop_start) * 1000.0
 
     overlay = {}
     mask_file = None
     output_frames = state["num_frames"]
-    if masks_by_frame:
+    postprocess_ms = 0.0
+    if lowres_by_frame:
+        postprocess_start = time.perf_counter()
+        ordered = [lowres_by_frame[i] for i in sorted(lowres_by_frame)]
+        masks = upsample_binary_masks_mlx(ordered, state["video_height"], state["video_width"], args.postprocess_batch_size)
+        postprocess_ms = (time.perf_counter() - postprocess_start) * 1000.0
+        output_frames = masks.shape[0]
+        args.output_mask.parent.mkdir(parents=True, exist_ok=True)
+        np.save(args.output_mask, masks)
+        mask_file = str(args.output_mask)
+        if not args.skip_overlay:
+            overlay = write_mask_overlay_video(args.video, masks, args.output_video, limit=masks.shape[0])
+    elif masks_by_frame:
         masks = np.stack([masks_by_frame[i] for i in sorted(masks_by_frame)], axis=0)
         output_frames = masks.shape[0]
         args.output_mask.parent.mkdir(parents=True, exist_ok=True)
@@ -137,6 +174,7 @@ def main():
         "method": "mlx_sam2_video_predictor",
         "model_id": args.model_id,
         "weights": str(args.weights),
+        "image_size": args.image_size,
         "points_original_xy": points.tolist(),
         "labels": labels.tolist(),
         "memory_dtype": args.memory_dtype,
@@ -148,13 +186,18 @@ def main():
         "skip_save": args.skip_save,
         "skip_overlay": args.skip_overlay,
         "raw_propagation": args.raw_propagation,
+        "defer_mask_upsampling": args.defer_mask_upsampling,
+        "postprocess_batch_size": args.postprocess_batch_size,
         "frames_dir": str(args.frames_dir),
         "frames": int(output_frames),
         "mask_file": mask_file,
         "init_ms": init_ms,
         "prompt_ms": prompt_ms,
         "propagate_ms": propagate_ms,
+        "postprocess_ms": postprocess_ms,
+        "propagate_plus_postprocess_ms": propagate_ms + postprocess_ms,
         "mean_propagate_ms_per_frame": propagate_ms / output_frames,
+        "mean_propagate_plus_postprocess_ms_per_frame": (propagate_ms + postprocess_ms) / output_frames,
         "frame_latency_ms": {
             "mean": float(np.mean(frame_latencies)),
             "median": float(np.median(frame_latencies)),

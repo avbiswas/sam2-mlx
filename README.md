@@ -126,12 +126,73 @@ On the same 80-frame run this reached about `272 ms/frame`, but mean IoU against
 the full-memory default dropped to about `0.970`, so it should be treated as a
 preview mode rather than the parity default.
 
-## Quantization
+### Lower-resolution experiment
 
-Generate and evaluate reduced-size variants of the small checkpoint:
+The video predictor also supports an experimental lower internal input
+resolution:
 
 ```bash
-uv run python scripts/quantize_small_model.py --runs 5 --warmup 2
+uv run python scripts/benchmark_video_memory_mlx.py \
+  --frames 80 \
+  --image-size 768 \
+  --precompute-image-features \
+  --feature-batch-size 4 \
+  --memory-dtype float16 \
+  --memory-attention-dtype float16 \
+  --skip-overlay \
+  --output-mask outputs/video_res_768/masks_80_fp16mem.npy \
+  --report outputs/benchmarks/video_res_768_80_fp16mem.json
+```
+
+On the 80-frame dog benchmark, `768x768` internal resolution reduced propagation
+from the `1024x1024` precompute baseline of about `269 ms/frame` to about
+`53 ms/frame`. Compared against the `1024x1024` masks, mean IoU was `0.949`,
+median non-empty IoU was `0.961`, and presence matched on `80 / 80` frames.
+This is a preview-quality setting, not the parity default.
+
+### Frame-skip interpolation experiment
+
+To measure temporal subsampling as an explicit speed/quality tradeoff, run SAM2
+on every `k`-th frame and interpolate logits for skipped frames:
+
+```bash
+uv run python scripts/benchmark_video_frame_skip_mlx.py \
+  --frames 30 \
+  --skip-step 2 \
+  --prompt-frame 14 \
+  --interpolation linear \
+  --precompute-image-features \
+  --feature-batch-size 4 \
+  --memory-attention-dtype bfloat16 \
+  --baseline-mask outputs/video_frame_skip/full_masks_30.npy \
+  --skip-overlay
+```
+
+This is an experiment path only; normal propagation still evaluates every frame.
+When `--prompt-frame` is not exactly on the sampled grid, the click is assigned
+to the nearest sampled frame. Tracking then runs forward and backward from that
+sampled prompt frame before interpolation fills the skipped frames. The
+experiment keeps sampled masks as MLX low-res logits, interpolates them on
+device, then runs one batched MLX upsample to video resolution for saving or
+overlay. On a 30-frame dog-video smoke run against full-frame MLX masks:
+
+| Skip step | Computed frames | Model ms/output frame | Total ms/output frame | Mean IoU |
+| --- | ---: | ---: | ---: | ---: |
+| 1, full baseline | 30 / 30 | `373 ms` | n/a | `1.000` |
+| 2 | 16 / 30 | `201 ms` | `325 ms` | `0.967` |
+| 3 | 11 / 30 | `115 ms` | `229 ms` | `0.945` |
+| 4 | 9 / 30 | `88 ms` | `208 ms` | `0.923` |
+
+For `k=3`, low-resolution interpolation itself was about `5 ms` total for all
+30 frames; the remaining postprocess cost was mostly video-resolution upsample
+and device-to-host transfer.
+
+## Quantization
+
+Generate and evaluate reduced-size variants for all converted checkpoints:
+
+```bash
+scripts/quantize_all_models.sh
 ```
 
 This writes ignored local checkpoints under:
@@ -140,10 +201,10 @@ This writes ignored local checkpoints under:
 checkpoints/quantized/
 ```
 
-and a report under:
+and reports under:
 
 ```text
-outputs/benchmarks/quantization_small.json
+outputs/benchmarks/quantization_sam2.1_hiera_*.json
 ```
 
 Current small-checkpoint results against the prompted-mask fixture:
@@ -162,6 +223,14 @@ linears use 8-bit, SAM2 memory/object-pointer linears use 4-bit, and the
 remaining floating weights are fp16. On a 40-frame dog video smoke run, this
 mixed-q4 checkpoint matched fp32 masks with mean IoU `0.997` and `40 / 40`
 presence matches.
+
+Upload the local model files to Hugging Face with:
+
+```bash
+scripts/upload_hf_models.sh
+```
+
+Use `DRY_RUN=1` to print the `hf upload` commands without uploading.
 
 ## Install
 
@@ -399,22 +468,4 @@ Reports are written under:
 
 ```text
 outputs/parity/
-```
-
-## Runtime Dependency Boundary
-
-Default runtime should not include Torch:
-
-```bash
-uv sync --python 3.14
-uv run python - <<'PY'
-import importlib.util as u
-print({m: bool(u.find_spec(m)) for m in ["torch", "torchvision", "hydra", "iopath", "mlx", "cv2"]})
-PY
-```
-
-Expected:
-
-```text
-torch=False, torchvision=False, hydra=False, iopath=False, mlx=True, cv2=True
 ```

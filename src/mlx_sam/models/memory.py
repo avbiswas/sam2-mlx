@@ -120,16 +120,23 @@ class RoPEAttention(Attention):
     def __init__(self, embedding_dim: int = 256, num_heads: int = 1, downsample_rate: int = 1, kv_in_dim: int | None = None, rope_k_repeat: bool = False):
         super().__init__(embedding_dim, num_heads, downsample_rate=downsample_rate, kv_in_dim=kv_in_dim)
         self.rope_k_repeat = rope_k_repeat
-        self._rope_cache = None
+        self._rope_cache = {}
 
     def __call__(self, q: mx.array, k: mx.array, v: mx.array, num_k_exclude_rope: int = 0) -> mx.array:
-        if self._rope_cache is None:
-            self._rope_cache = compute_axial_rope(self.internal_dim // self.num_heads, 64, 64)
-            mx.eval(*self._rope_cache)
-        cos, sin = self._rope_cache
         q = self._separate_heads(self.q_proj(q))
         k = self._separate_heads(self.k_proj(k))
         v = self._separate_heads(self.v_proj(v))
+        q_len = q.shape[-2]
+        side = int(math.isqrt(q_len))
+        end_x, end_y = (side, side) if side * side == q_len else (q_len, 1)
+        rope_key = (self.internal_dim // self.num_heads, end_x, end_y, str(q.dtype))
+        if rope_key not in self._rope_cache:
+            cos, sin = compute_axial_rope(self.internal_dim // self.num_heads, end_x, end_y)
+            cos = cos.astype(q.dtype)
+            sin = sin.astype(q.dtype)
+            mx.eval(cos, sin)
+            self._rope_cache[rope_key] = (cos, sin)
+        cos, sin = self._rope_cache[rope_key]
         repeat = k.shape[-2] // q.shape[-2] if self.rope_k_repeat and q.shape[-2] != 0 else 1
         q = apply_rope(q, cos, sin)
         rope_len = k.shape[-2] - num_k_exclude_rope

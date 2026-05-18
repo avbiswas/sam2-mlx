@@ -120,6 +120,7 @@ class SAM2VideoPredictor:
         model: Sam2ImageSegmenter | None = None,
         checkpoint: str | Path | None = None,
         model_id: str | None = None,
+        image_size: int | None = None,
         memory_dtype: str | None = None,
         memory_attention_dtype: str | None = None,
         num_maskmem: int | None = None,
@@ -134,6 +135,10 @@ class SAM2VideoPredictor:
                 checkpoint = Path("checkpoints/sam2.1_hiera_small_image_segmenter.safetensors")
             model = load_image_segmenter(checkpoint, model_id=model_id)
         self.model = model
+        if image_size is not None:
+            self.image_size = int(image_size)
+        if hasattr(self.model, "set_image_size"):
+            self.model.set_image_size(self.image_size)
         self.memory_dtype = memory_dtype
         self.model.memory_attention_dtype = memory_attention_dtype
         if num_maskmem is not None:
@@ -152,12 +157,16 @@ class SAM2VideoPredictor:
         from huggingface_hub import hf_hub_download, list_repo_files
 
         filename = kwargs.pop("filename", None)
+        repo_files = list_repo_files(model_id)
         if filename is None:
-            safetensors = [file for file in list_repo_files(model_id) if file.endswith(".safetensors")]
+            safetensors = [file for file in repo_files if file.endswith(".safetensors")]
             if len(safetensors) != 1:
                 raise ValueError(f"Expected exactly one safetensors file in {model_id}; found {safetensors}")
             filename = safetensors[0]
         checkpoint = hf_hub_download(repo_id=model_id, filename=filename)
+        sidecar = f"{filename}.json"
+        if sidecar in repo_files:
+            hf_hub_download(repo_id=model_id, filename=sidecar)
         return cls(checkpoint=checkpoint, model_id=model_id, **kwargs)
 
     def init_state(
@@ -261,11 +270,25 @@ class SAM2VideoPredictor:
             "frame_idx": frame_idx,
         }
 
-    def _ensure_memory_encoded(self, inference_state: dict, obj_idx: int, frame_idx: int, out: dict, is_mask_from_points: bool):
+    def _ensure_memory_encoded(
+        self,
+        inference_state: dict,
+        obj_idx: int,
+        frame_idx: int,
+        out: dict,
+        is_mask_from_points: bool,
+        memory_frame_idx: int | None = None,
+    ):
         if out.get("maskmem_features") is not None:
             return
         encoded = self._get_image_feature(inference_state, frame_idx)
-        memory = self._encode_memory(encoded, out["pred_masks"], out, frame_idx, is_mask_from_points=is_mask_from_points)
+        memory = self._encode_memory(
+            encoded,
+            out["pred_masks"],
+            out,
+            frame_idx if memory_frame_idx is None else memory_frame_idx,
+            is_mask_from_points=is_mask_from_points,
+        )
         out.update(memory)
         mx.eval(out["maskmem_features"], out["maskmem_pos_enc"])
 
@@ -296,10 +319,12 @@ class SAM2VideoPredictor:
         point_inputs: dict | None = None,
         prev_low: np.ndarray | None = None,
         reverse: bool = False,
+        memory_frame_idx: int | None = None,
     ) -> dict:
         cond = list(obj_output_dict["cond_frame_outputs"].values())
         mem = list(obj_output_dict["non_cond_frame_outputs"].values())
-        conditioned = self.model.condition_with_memories(encoded, mem, cond_memories=cond, current_frame_idx=frame_idx, track_in_reverse=reverse)
+        current_frame_idx = frame_idx if memory_frame_idx is None else memory_frame_idx
+        conditioned = self.model.condition_with_memories(encoded, mem, cond_memories=cond, current_frame_idx=current_frame_idx, track_in_reverse=reverse)
         conditioned_encoded = dict(encoded)
         conditioned_encoded["vision_features"] = conditioned
         if point_inputs is None:
@@ -327,13 +352,22 @@ class SAM2VideoPredictor:
         reverse: bool,
         prev_low: np.ndarray | None = None,
         run_mem_encoder: bool = True,
+        memory_frame_idx: int | None = None,
     ) -> dict:
         encoded = self._get_image_feature(inference_state, frame_idx)
         obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
         if is_init_cond_frame and point_inputs is not None and prev_low is None:
             out = self._predict_initial(encoded, point_inputs["point_coords"], point_inputs["point_labels"])
         else:
-            out = self._predict_tracked(encoded, obj_output_dict, frame_idx, point_inputs=point_inputs, prev_low=prev_low, reverse=reverse)
+            out = self._predict_tracked(
+                encoded,
+                obj_output_dict,
+                frame_idx,
+                point_inputs=point_inputs,
+                prev_low=prev_low,
+                reverse=reverse,
+                memory_frame_idx=memory_frame_idx,
+            )
         low = _best_low_mask(out)
         current_out = {
             "pred_masks": low,
@@ -343,7 +377,7 @@ class SAM2VideoPredictor:
             "maskmem_pos_enc": None,
         }
         if run_mem_encoder:
-            memory = self._encode_memory(encoded, low, out, frame_idx, is_mask_from_points=(point_inputs is not None))
+            memory = self._encode_memory(encoded, low, out, frame_idx if memory_frame_idx is None else memory_frame_idx, is_mask_from_points=(point_inputs is not None))
             current_out.update(memory)
         eval_targets = [current_out["pred_masks"], current_out["obj_ptr"], current_out["object_score_logits"]]
         if current_out["maskmem_features"] is not None:
