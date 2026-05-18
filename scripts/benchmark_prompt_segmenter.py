@@ -6,7 +6,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
-from sam_mlx.weights import load_image_segmenter
+from mlx_vision.weights import load_image_segmenter
 
 ROOT = Path(__file__).resolve().parents[1]
 

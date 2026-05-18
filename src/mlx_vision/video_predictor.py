@@ -8,9 +8,9 @@ import mlx.core as mx
 import numpy as np
 from PIL import Image
 
-from sam_mlx.models import Sam2ImageSegmenter
-from sam_mlx.preprocess import preprocess_image
-from sam_mlx.weights import load_image_segmenter
+from mlx_vision.models import Sam2ImageSegmenter
+from mlx_vision.preprocess import preprocess_image
+from mlx_vision.weights import load_image_segmenter
 
 
 NO_OBJ_SCORE = -1024.0
@@ -143,9 +143,14 @@ class SAM2VideoPredictor:
         path = Path(model_id)
         if path.exists():
             return cls(checkpoint=path, model_id=kwargs.pop("model_id", None), **kwargs)
-        from huggingface_hub import hf_hub_download
+        from huggingface_hub import hf_hub_download, list_repo_files
 
-        filename = kwargs.pop("filename", "sam2.1_hiera_small_image_segmenter.safetensors")
+        filename = kwargs.pop("filename", None)
+        if filename is None:
+            safetensors = [file for file in list_repo_files(model_id) if file.endswith(".safetensors")]
+            if len(safetensors) != 1:
+                raise ValueError(f"Expected exactly one safetensors file in {model_id}; found {safetensors}")
+            filename = safetensors[0]
         checkpoint = hf_hub_download(repo_id=model_id, filename=filename)
         return cls(checkpoint=checkpoint, model_id=model_id, **kwargs)
 

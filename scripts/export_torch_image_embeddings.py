@@ -14,7 +14,7 @@ from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from sam_mlx.preprocess import preprocess_video
+from mlx_vision.preprocess import preprocess_video
 
 
 def build_model(checkpoint: Path):

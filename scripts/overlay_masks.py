@@ -2,7 +2,7 @@ import argparse
 import json
 from pathlib import Path
 
-from sam_mlx.overlay import load_masks, synthetic_masks_for_video, write_mask_overlay_video
+from mlx_vision.overlay import load_masks, synthetic_masks_for_video, write_mask_overlay_video
 
 ROOT = Path(__file__).resolve().parents[1]
 

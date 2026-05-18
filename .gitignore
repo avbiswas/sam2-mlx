@@ -3,6 +3,9 @@ data/
 hf_upload
 __pycache__
 *.py[oc]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 build/
 dist/
 wheels/
@@ -11,11 +14,18 @@ wheels/
 
 # Virtual environments
 .venv
+.uv-cache/
+.env
+.env.*
 
 # Local reference repositories and model artifacts
 third_party/
 references/
 checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
 
 # Generated benchmark and inference outputs
 outputs/

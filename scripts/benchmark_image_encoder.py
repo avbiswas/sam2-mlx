@@ -17,7 +17,7 @@ from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from sam_mlx.weights import load_image_encoder
+from mlx_vision.weights import load_image_encoder
 
 
 def build_torch_model(checkpoint: Path, device: torch.device):
