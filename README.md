@@ -88,6 +88,43 @@ uv run python scripts/track_video_memory.py --frames 150 \
   --report outputs/benchmarks/video_memory_latency_150f.json
 ```
 
+## Quantization
+
+Generate and evaluate reduced-size variants of the small checkpoint:
+
+```bash
+uv run python scripts/quantize_small_model.py --runs 5 --warmup 2
+```
+
+This writes ignored local checkpoints under:
+
+```text
+checkpoints/quantized/
+```
+
+and a report under:
+
+```text
+outputs/benchmarks/quantization_small.json
+```
+
+Current small-checkpoint results against the prompted-mask fixture:
+
+| Variant | Checkpoint | Active weights | Mask mean abs | IoU max abs | Full prompt |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| fp32 | `199.7 MiB` | `199.7 MiB` | `8.1e-06` | `4.8e-07` | `84.5 ms` |
+| fp16 | `99.9 MiB` | `99.9 MiB` | `8.2e-03` | `1.1e-03` | `85.1 ms` |
+| int8, all group-64 linears | `76.7 MiB` | `77.6 MiB` | `3.0e-02` | `1.9e-03` | `93.6 ms` |
+| int4, all group-64 linears | `55.3 MiB` | `56.6 MiB` | `6.5e-01` | `7.2e-02` | `91.9 ms` |
+| mixed-q4: int8 image/prompt, int4 memory | `56.4 MiB` | `57.3 MiB` | `2.9e-02` | `8.8e-04` | `93.8 ms` |
+
+The useful 4-bit path is mixed precision, not pure int4. The current best
+recipe is `q8_trunk_mask_q4_memory`: Hiera image trunk and SAM mask decoder
+linears use 8-bit, SAM2 memory/object-pointer linears use 4-bit, and the
+remaining floating weights are fp16. On a 40-frame dog video smoke run, this
+mixed-q4 checkpoint matched fp32 masks with mean IoU `0.997` and `40 / 40`
+presence matches.
+
 ## Install
 
 ```bash
