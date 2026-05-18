@@ -26,6 +26,7 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         self.max_obj_ptrs_in_encoder = 16
         self.memory_temporal_stride_for_eval = 1
         self.max_cond_frames_in_attn = -1
+        self.memory_attention_dtype = None
 
     def encode_image(self, pixels: mx.array) -> dict:
         out = super().__call__(pixels)
@@ -132,8 +133,8 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
     def condition_with_memories(
         self,
         encoded: dict,
-        memories: list[dict] | None = None,
-        cond_memories: list[dict] | None = None,
+        memories: list[dict] | dict[int, dict] | None = None,
+        cond_memories: list[dict] | dict[int, dict] | None = None,
         current_frame_idx: int | None = None,
         track_in_reverse: bool = False,
     ) -> mx.array:
@@ -143,6 +144,20 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         seq_pos = pos.reshape(pos.shape[0], pos.shape[1], -1).transpose(2, 0, 1)
         mem_parts: list[mx.array] = []
         pos_parts: list[mx.array] = []
+
+        def as_frame_dict(items: list[dict] | dict[int, dict] | None) -> dict[int, dict]:
+            if items is None:
+                return {}
+            if isinstance(items, dict):
+                return {int(frame): memory for frame, memory in items.items()}
+            return {int(memory["frame_idx"]): memory for memory in items if memory.get("frame_idx") is not None}
+
+        def as_memory_list(items: list[dict] | dict[int, dict] | None) -> list[dict]:
+            if items is None:
+                return []
+            if isinstance(items, dict):
+                return list(items.values())
+            return items
 
         def memory_frame(memory: dict) -> int | None:
             frame = memory.get("frame_idx")
@@ -157,15 +172,15 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
             mem_parts.append(mem)
             pos_parts.append(mem_pos)
 
-        cond_by_frame = {memory_frame(memory): memory for memory in cond_memories or [] if memory_frame(memory) is not None}
-        memory_by_frame = {memory_frame(memory): memory for memory in memories or [] if memory_frame(memory) is not None}
+        cond_by_frame = as_frame_dict(cond_memories)
+        memory_by_frame = as_frame_dict(memories)
 
         if current_frame_idx is None or not cond_by_frame:
-            for memory in cond_memories or []:
+            for memory in as_memory_list(cond_memories):
                 append_memory(memory, t_pos=0)
             # Fallback for direct callers without frame indices. Match SAM2's temporal
             # ordering: oldest remembered frame gets t_pos=1, latest gets t_pos=6.
-            recent = (memories or [])[-(self.num_maskmem - 1) :]
+            recent = as_memory_list(memories)[-(self.num_maskmem - 1) :]
             for t_pos, memory in enumerate(recent, start=self.num_maskmem - len(recent)):
                 append_memory(memory, t_pos=t_pos)
             selected_cond: dict[int, dict] = {}
@@ -198,7 +213,8 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         num_obj = 0
         ptr_parts: list[tuple[int, mx.array]] = []
         if current_frame_idx is None:
-            for idx, memory in enumerate((cond_memories or []) + (memories or [])[-(self.max_obj_ptrs_in_encoder - 1) :]):
+            ptr_memories = as_memory_list(cond_memories) + as_memory_list(memories)[-(self.max_obj_ptrs_in_encoder - 1) :]
+            for idx, memory in enumerate(ptr_memories):
                 if memory.get("obj_ptr") is not None:
                     ptr_parts.append((idx, memory["obj_ptr"]))
             ptr_parts = ptr_parts[-self.max_obj_ptrs_in_encoder :]
@@ -227,8 +243,19 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
             mem = mx.concatenate([mem, ptr], axis=0)
             mem_pos = mx.concatenate([mem_pos, ptr_pos], axis=0)
             num_obj = ptr.shape[0]
+        original_dtype = seq.dtype
+        if self.memory_attention_dtype == "bfloat16":
+            seq = seq.astype(mx.bfloat16)
+            seq_pos = seq_pos.astype(mx.bfloat16)
+            mem = mem.astype(mx.bfloat16)
+            mem_pos = mem_pos.astype(mx.bfloat16)
+        elif self.memory_attention_dtype == "float16":
+            seq = seq.astype(mx.float16)
+            seq_pos = seq_pos.astype(mx.float16)
+            mem = mem.astype(mx.float16)
+            mem_pos = mem_pos.astype(mx.float16)
         out = self.memory_attention(seq, seq_pos, mem, mem_pos, num_obj_ptr_tokens=num_obj)
-        return out.transpose(1, 2, 0).reshape(feat.shape)
+        return out.astype(original_dtype).transpose(1, 2, 0).reshape(feat.shape)
 
     def __call__(self, pixels: mx.array, point_coords: mx.array | None, point_labels: mx.array | None, mask_input: mx.array | None = None, multimask_output: bool = True) -> dict:
         encoded = self.encode_image(pixels)

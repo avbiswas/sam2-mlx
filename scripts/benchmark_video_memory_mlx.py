@@ -57,6 +57,11 @@ def main():
     parser.add_argument("--labels", nargs="+", type=int, default=[1, 1, 0, 0])
     parser.add_argument("--precompute-image-features", action="store_true")
     parser.add_argument("--feature-batch-size", type=int, default=4)
+    parser.add_argument("--memory-dtype", choices=["float32", "bfloat16", "float16"], default="float32")
+    parser.add_argument("--memory-attention-dtype", choices=["float32", "bfloat16", "float16"], default="float32")
+    parser.add_argument("--skip-save", action="store_true")
+    parser.add_argument("--skip-overlay", action="store_true")
+    parser.add_argument("--raw-propagation", action="store_true", help="Skip public video-resolution mask materialization during propagation.")
     parser.add_argument("--output-mask", type=Path, default=ROOT / "outputs/video_memory_multiclick/mlx_masks.npy")
     parser.add_argument("--output-video", type=Path, default=ROOT / "outputs/video_memory_multiclick/mlx_overlay.mp4")
     parser.add_argument("--report", type=Path, default=ROOT / "outputs/benchmarks/video_memory_multiclick_mlx.json")
@@ -71,7 +76,14 @@ def main():
     if not frame_paths:
         raise RuntimeError("No frames extracted")
 
-    predictor = SAM2VideoPredictor(checkpoint=args.weights, model_id=args.model_id)
+    memory_dtype = None if args.memory_dtype == "float32" else args.memory_dtype
+    memory_attention_dtype = None if args.memory_attention_dtype == "float32" else args.memory_attention_dtype
+    predictor = SAM2VideoPredictor(
+        checkpoint=args.weights,
+        model_id=args.model_id,
+        memory_dtype=memory_dtype,
+        memory_attention_dtype=memory_attention_dtype,
+    )
 
     init_start = time.perf_counter()
     state = predictor.init_state(
@@ -96,17 +108,25 @@ def main():
     frame_latencies = []
     prop_start = time.perf_counter()
     last = prop_start
-    for out_frame_idx, _out_obj_ids, out_mask_logits in predictor.propagate_in_video(state):
+    for out_frame_idx, _out_obj_ids, out_mask_logits in predictor.propagate_in_video(state, return_masks=not args.raw_propagation):
         now = time.perf_counter()
         frame_latencies.append((now - last) * 1000.0)
         last = now
-        masks_by_frame[int(out_frame_idx)] = (out_mask_logits[0, 0] > 0).astype(np.float32)
+        if out_mask_logits is not None and not args.skip_save:
+            masks_by_frame[int(out_frame_idx)] = (out_mask_logits[0, 0] > 0).astype(np.float32)
     propagate_ms = (time.perf_counter() - prop_start) * 1000.0
 
-    masks = np.stack([masks_by_frame[i] for i in sorted(masks_by_frame)], axis=0)
-    args.output_mask.parent.mkdir(parents=True, exist_ok=True)
-    np.save(args.output_mask, masks)
-    overlay = write_mask_overlay_video(args.video, masks, args.output_video, limit=masks.shape[0])
+    overlay = {}
+    mask_file = None
+    output_frames = state["num_frames"]
+    if masks_by_frame:
+        masks = np.stack([masks_by_frame[i] for i in sorted(masks_by_frame)], axis=0)
+        output_frames = masks.shape[0]
+        args.output_mask.parent.mkdir(parents=True, exist_ok=True)
+        np.save(args.output_mask, masks)
+        mask_file = str(args.output_mask)
+        if not args.skip_overlay:
+            overlay = write_mask_overlay_video(args.video, masks, args.output_video, limit=masks.shape[0])
 
     report = {
         **overlay,
@@ -115,14 +135,20 @@ def main():
         "weights": str(args.weights),
         "points_original_xy": points.tolist(),
         "labels": labels.tolist(),
+        "memory_dtype": args.memory_dtype,
+        "memory_attention_dtype": args.memory_attention_dtype,
         "precompute_image_features": args.precompute_image_features,
         "feature_batch_size": args.feature_batch_size,
+        "skip_save": args.skip_save,
+        "skip_overlay": args.skip_overlay,
+        "raw_propagation": args.raw_propagation,
         "frames_dir": str(args.frames_dir),
-        "mask_file": str(args.output_mask),
+        "frames": int(output_frames),
+        "mask_file": mask_file,
         "init_ms": init_ms,
         "prompt_ms": prompt_ms,
         "propagate_ms": propagate_ms,
-        "mean_propagate_ms_per_frame": propagate_ms / masks.shape[0],
+        "mean_propagate_ms_per_frame": propagate_ms / output_frames,
         "frame_latency_ms": {
             "mean": float(np.mean(frame_latencies)),
             "median": float(np.median(frame_latencies)),

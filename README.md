@@ -392,9 +392,11 @@ uv run python scripts/benchmark_video_memory_mlx.py \
   --frames-dir outputs/video_memory_multiclick/small_frames_full \
   --precompute-image-features \
   --feature-batch-size 4 \
-  --output-mask outputs/video_memory_multiclick/small_mlx_masks_full_precompute.npy \
-  --output-video outputs/video_memory_multiclick/small_mlx_overlay_full_precompute.mp4 \
-  --report outputs/benchmarks/video_memory_multiclick_small_mlx_full_precompute.json \
+  --memory-dtype bfloat16 \
+  --memory-attention-dtype bfloat16 \
+  --output-mask outputs/video_memory_multiclick/small_mlx_masks_full_precompute_bf16_attn.npy \
+  --output-video outputs/video_memory_multiclick/small_mlx_overlay_full_precompute_bf16_attn.mp4 \
+  --report outputs/benchmarks/video_memory_multiclick_small_mlx_full_precompute_bf16_attn.json \
   --points 625 429 700 470 300 250 950 610 \
   --labels 1 1 0 0
 ```
@@ -409,11 +411,17 @@ Current indicative numbers on this machine:
 - Dog full-video memory tracker: about `269 ms/frame` on the 289-frame run
 - Dog full-video multi-click memory tracker, post-prompt propagation:
   - Official Torch: about `331 ms/frame`
-  - MLX on-demand: about `366 ms/frame`
-  - MLX with batched image-feature precompute: about `188 ms/frame`
+  - MLX on-demand with bfloat memory attention: about `351 ms/frame`
+  - MLX with batched image-feature precompute and bfloat memory attention:
+    about `189 ms/frame`
 - Dog full-video total for the same multi-click run:
   - Official Torch: about `100.5 s`
-  - MLX with batched image-feature precompute: about `98.1 s`
+  - MLX with batched image-feature precompute and bfloat memory attention:
+    about `94.8 s`
+- Dog full-video raw propagation, excluding mask saving, overlay, and final
+  video-resolution output resize:
+  - Official Torch raw: about `407 ms/frame`
+  - MLX raw with bfloat memory attention: about `287 ms/frame`
 
 Benchmark reports are written under:
 
