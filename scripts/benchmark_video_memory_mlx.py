@@ -59,6 +59,8 @@ def main():
     parser.add_argument("--feature-batch-size", type=int, default=4)
     parser.add_argument("--memory-dtype", choices=["float32", "bfloat16", "float16"], default="float32")
     parser.add_argument("--memory-attention-dtype", choices=["float32", "bfloat16", "float16"], default="float32")
+    parser.add_argument("--num-maskmem", type=int, help="Temporal memory slots to use. Default keeps SAM2's 7-slot eval memory.")
+    parser.add_argument("--max-obj-ptrs", type=int, help="Object pointer tokens to use in memory attention. Default keeps SAM2's 16.")
     parser.add_argument("--skip-save", action="store_true")
     parser.add_argument("--skip-overlay", action="store_true")
     parser.add_argument("--raw-propagation", action="store_true", help="Skip public video-resolution mask materialization during propagation.")
@@ -83,6 +85,8 @@ def main():
         model_id=args.model_id,
         memory_dtype=memory_dtype,
         memory_attention_dtype=memory_attention_dtype,
+        num_maskmem=args.num_maskmem,
+        max_obj_ptrs_in_encoder=args.max_obj_ptrs,
     )
 
     init_start = time.perf_counter()
@@ -137,6 +141,8 @@ def main():
         "labels": labels.tolist(),
         "memory_dtype": args.memory_dtype,
         "memory_attention_dtype": args.memory_attention_dtype,
+        "num_maskmem": args.num_maskmem or 7,
+        "max_obj_ptrs": args.max_obj_ptrs or 16,
         "precompute_image_features": args.precompute_image_features,
         "feature_batch_size": args.feature_batch_size,
         "skip_save": args.skip_save,

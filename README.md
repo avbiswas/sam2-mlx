@@ -88,6 +88,44 @@ uv run python scripts/track_video_memory.py --frames 150 \
   --report outputs/benchmarks/video_memory_latency_150f.json
 ```
 
+For editor-style use, precomputing image features is the main parity-preserving
+speed lever. On the 80-frame dog benchmark, feature precompute reduced
+post-prompt propagation from about `437 ms/frame` to about `269 ms/frame` with
+exact mask parity (`1.0` mean IoU against the non-precomputed run):
+
+This mode is opt-in and has no effect on the default predictor behavior. By
+default, `init_state(...)` computes frame features on demand. Passing
+`precompute_image_features=True` computes and caches all frame image features
+upfront, which increases init time and memory use but makes later propagation
+and interactive correction passes faster. The masks should be unchanged; the
+benchmark above verifies exact parity for the tested clip.
+
+```bash
+uv run python scripts/benchmark_video_memory_mlx.py \
+  --frames 80 \
+  --memory-dtype bfloat16 \
+  --memory-attention-dtype bfloat16 \
+  --precompute-image-features \
+  --feature-batch-size 4 \
+  --skip-overlay \
+  --report outputs/benchmarks/speed_small_precompute_b4_80.json
+```
+
+There are also explicit speed/quality knobs for lower-latency previews:
+
+```bash
+uv run python scripts/benchmark_video_memory_mlx.py \
+  --frames 80 \
+  --memory-dtype bfloat16 \
+  --memory-attention-dtype bfloat16 \
+  --num-maskmem 2 \
+  --max-obj-ptrs 4
+```
+
+On the same 80-frame run this reached about `272 ms/frame`, but mean IoU against
+the full-memory default dropped to about `0.970`, so it should be treated as a
+preview mode rather than the parity default.
+
 ## Quantization
 
 Generate and evaluate reduced-size variants of the small checkpoint:

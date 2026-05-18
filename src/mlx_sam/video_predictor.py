@@ -122,6 +122,8 @@ class SAM2VideoPredictor:
         model_id: str | None = None,
         memory_dtype: str | None = None,
         memory_attention_dtype: str | None = None,
+        num_maskmem: int | None = None,
+        max_obj_ptrs_in_encoder: int | None = None,
         non_overlap_masks: bool = False,
         clear_non_cond_mem_around_input: bool = False,
         add_all_frames_to_correct_as_cond: bool = False,
@@ -134,6 +136,10 @@ class SAM2VideoPredictor:
         self.model = model
         self.memory_dtype = memory_dtype
         self.model.memory_attention_dtype = memory_attention_dtype
+        if num_maskmem is not None:
+            self.model.num_maskmem = int(num_maskmem)
+        if max_obj_ptrs_in_encoder is not None:
+            self.model.max_obj_ptrs_in_encoder = int(max_obj_ptrs_in_encoder)
         self.non_overlap_masks = non_overlap_masks
         self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
         self.add_all_frames_to_correct_as_cond = add_all_frames_to_correct_as_cond
