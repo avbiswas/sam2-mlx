@@ -4,7 +4,7 @@ from typing import Sequence
 import mlx.core as mx
 import mlx.nn as nn
 
-from mlx_vision.config import HieraConfig
+from mlx_sam.config import HieraConfig
 
 
 def _to_2tuple(x: int | Sequence[int]) -> tuple[int, int]:

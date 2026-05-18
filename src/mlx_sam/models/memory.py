@@ -3,8 +3,8 @@ import math
 import mlx.core as mx
 import mlx.nn as nn
 
-from mlx_vision.models.image_encoder import PositionEmbeddingSine
-from mlx_vision.models.sam_heads import Attention, LayerNorm2d
+from mlx_sam.models.image_encoder import PositionEmbeddingSine
+from mlx_sam.models.sam_heads import Attention, LayerNorm2d
 
 
 def _resize_1d(x: mx.array, out_size: int, axis: int) -> mx.array:

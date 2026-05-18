@@ -16,7 +16,7 @@ SAM2_REPO = ROOT / "third_party" / "sam2"
 sys.path.insert(0, str(SAM2_REPO))
 
 from sam2.build_sam import build_sam2_video_predictor
-from mlx_vision.overlay import write_mask_overlay_video
+from mlx_sam.overlay import write_mask_overlay_video
 
 
 def extract_frames(video: Path, output_dir: Path, limit: int | None = None) -> list[Path]:

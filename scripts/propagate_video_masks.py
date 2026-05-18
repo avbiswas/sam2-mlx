@@ -7,9 +7,9 @@ import cv2
 import mlx.core as mx
 import numpy as np
 
-from mlx_vision.overlay import write_mask_overlay_video
-from mlx_vision.preprocess import preprocess_video
-from mlx_vision.weights import load_image_segmenter
+from mlx_sam.overlay import write_mask_overlay_video
+from mlx_sam.preprocess import preprocess_video
+from mlx_sam.weights import load_image_segmenter
 
 ROOT = Path(__file__).resolve().parents[1]
 

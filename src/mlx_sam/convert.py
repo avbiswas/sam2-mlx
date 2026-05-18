@@ -7,7 +7,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
-from mlx_vision.config import model_config_for_name
+from mlx_sam.config import model_config_for_name
 
 
 HF_MODEL_ID_TO_FILENAMES = {

@@ -16,7 +16,7 @@ from hydra import compose, initialize_config_dir
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from mlx_vision.weights import load_image_segmenter
+from mlx_sam.weights import load_image_segmenter
 
 
 MODEL_ID_TO_CONFIG = {

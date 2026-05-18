@@ -5,7 +5,7 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
-from mlx_vision.weights import load_image_encoder
+from mlx_sam.weights import load_image_encoder
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -6,8 +6,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from mlx_vision.overlay import write_mask_overlay_video
-from mlx_vision.video_predictor import SAM2VideoPredictor
+from mlx_sam.overlay import write_mask_overlay_video
+from mlx_sam.video_predictor import SAM2VideoPredictor
 
 ROOT = Path(__file__).resolve().parents[1]
 

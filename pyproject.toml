@@ -1,7 +1,7 @@
 [project]
-name = "mlx-vision"
+name = "mlx-sam"
 version = "0.1.0"
-description = "MLX-native vision models for segmentation and video tracking"
+description = "MLX-native SAM models for segmentation and video tracking"
 readme = "README.md"
 authors = [
     { name = "Avishek Biswas", email = "sudavivi@gmail.com" }
@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.scripts]
-mlx-vision = "mlx_vision:main"
-mlx-vision-convert = "mlx_vision.convert:main"
+mlx-sam = "mlx_sam:main"
+mlx-sam-convert = "mlx_sam.convert:main"
 
 [project.optional-dependencies]
 torch-parity = [

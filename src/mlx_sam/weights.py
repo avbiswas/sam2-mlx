@@ -2,9 +2,9 @@ from pathlib import Path
 
 import mlx.core as mx
 
-from mlx_vision.config import model_config_for_name
-from mlx_vision.models import Sam2ImageEncoder
-from mlx_vision.models import Sam2ImageSegmenter
+from mlx_sam.config import model_config_for_name
+from mlx_sam.models import Sam2ImageEncoder
+from mlx_sam.models import Sam2ImageSegmenter
 
 
 def load_image_encoder(path: str | Path, model_id: str | None = None) -> Sam2ImageEncoder:

@@ -343,7 +343,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mlx-vision"
+name = "mlx-sam"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

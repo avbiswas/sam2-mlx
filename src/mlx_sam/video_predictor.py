@@ -8,9 +8,9 @@ import mlx.core as mx
 import numpy as np
 from PIL import Image
 
-from mlx_vision.models import Sam2ImageSegmenter
-from mlx_vision.preprocess import preprocess_image
-from mlx_vision.weights import load_image_segmenter
+from mlx_sam.models import Sam2ImageSegmenter
+from mlx_sam.preprocess import preprocess_image
+from mlx_sam.weights import load_image_segmenter
 
 
 NO_OBJ_SCORE = -1024.0

@@ -1,4 +1,4 @@
-from mlx_vision.convert import main
+from mlx_sam.convert import main
 
 
 if __name__ == "__main__":

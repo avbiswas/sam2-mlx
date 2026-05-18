@@ -3,8 +3,8 @@ import math
 import mlx.core as mx
 import mlx.nn as nn
 
-from mlx_vision.config import SAM2_1_HIERA_SMALL_IMAGE_ENCODER, Sam2ImageEncoderConfig
-from mlx_vision.models.hiera import Hiera
+from mlx_sam.config import SAM2_1_HIERA_SMALL_IMAGE_ENCODER, Sam2ImageEncoderConfig
+from mlx_sam.models.hiera import Hiera
 
 
 class PositionEmbeddingSine(nn.Module):

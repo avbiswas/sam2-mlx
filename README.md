@@ -1,6 +1,6 @@
-# mlx-vision
+# mlx-sam
 
-MLX-native vision models for Apple Silicon. The first supported model family is
+MLX-native SAM models for Apple Silicon. The first supported model family is
 Meta SAM 2.1 for interactive image segmentation and video object tracking.
 
 The goal of this repo is practical local video segmentation: load an MLX SAM2
@@ -113,7 +113,7 @@ references/mlx-vlm
 ```python
 import numpy as np
 
-from mlx_vision import SAM2VideoPredictor
+from mlx_sam import SAM2VideoPredictor
 
 predictor = SAM2VideoPredictor.from_pretrained(
     "avbiswas/sam2.1-hiera-small-mlx-fp32"
@@ -136,7 +136,7 @@ for frame_idx, obj_ids, masks in predictor.propagate_in_video(state):
 Local checkpoint loading:
 
 ```python
-from mlx_vision import SAM2VideoPredictor
+from mlx_sam import SAM2VideoPredictor
 
 predictor = SAM2VideoPredictor(
     checkpoint="checkpoints/sam2.1_hiera_small_image_segmenter.safetensors"
@@ -203,7 +203,7 @@ uv run python scripts/overlay_masks.py --synthetic-smoke-test
 Convert from Hugging Face:
 
 ```bash
-uv run --extra torch-parity mlx-vision-convert \
+uv run --extra torch-parity mlx-sam-convert \
   --hf-id facebook/sam2.1-hiera-small \
   --output-dir checkpoints
 ```
@@ -220,7 +220,7 @@ facebook/sam2.1-hiera-large
 Convert a local Torch checkpoint:
 
 ```bash
-uv run --extra torch-parity mlx-vision-convert \
+uv run --extra torch-parity mlx-sam-convert \
   --checkpoint checkpoints/sam2.1_hiera_small.pt \
   --model-id facebook/sam2.1-hiera-small \
   --output checkpoints/sam2.1_hiera_small_image_segmenter.safetensors

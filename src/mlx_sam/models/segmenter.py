@@ -2,10 +2,10 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
-from mlx_vision.config import SAM2_1_HIERA_SMALL_IMAGE_ENCODER, Sam2ImageEncoderConfig
-from mlx_vision.models.image_encoder import Sam2ImageEncoder
-from mlx_vision.models.memory import MemoryAttention, MemoryEncoder, upsample_mask
-from mlx_vision.models.sam_heads import MaskDecoder, PromptEncoder, SamMLP
+from mlx_sam.config import SAM2_1_HIERA_SMALL_IMAGE_ENCODER, Sam2ImageEncoderConfig
+from mlx_sam.models.image_encoder import Sam2ImageEncoder
+from mlx_sam.models.memory import MemoryAttention, MemoryEncoder, upsample_mask
+from mlx_sam.models.sam_heads import MaskDecoder, PromptEncoder, SamMLP
 
 
 class Sam2ImageSegmenter(Sam2ImageEncoder):
