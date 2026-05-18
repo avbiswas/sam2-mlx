@@ -1,7 +1,8 @@
 # sam-mlx
 
-MLX inference port of Meta's SAM 2.1, currently targeting
-`facebook/sam2.1-hiera-small`.
+MLX inference port of Meta's SAM 2.1. The most tested checkpoint is
+`facebook/sam2.1-hiera-small`; the converter understands the SAM2.1 tiny,
+small, base-plus, and large Hugging Face checkpoints.
 
 The runtime package is Python 3.14 + MLX and does not install PyTorch. PyTorch is
 only used through the optional `torch-parity` extra for checkpoint conversion and
@@ -61,13 +62,41 @@ references/mlx-vlm
 ## Convert Weights
 
 ```bash
-uv run --extra torch-parity python scripts/convert_image_encoder_weights.py
+uv run --extra torch-parity sam-mlx-convert \
+  --hf-id facebook/sam2.1-hiera-small \
+  --output-dir checkpoints
 ```
 
 This writes:
 
 ```text
 checkpoints/sam2.1_hiera_small_image_segmenter.safetensors
+```
+
+Supported Hugging Face source ids:
+
+```text
+facebook/sam2.1-hiera-tiny
+facebook/sam2.1-hiera-small
+facebook/sam2.1-hiera-base-plus
+facebook/sam2.1-hiera-large
+```
+
+Convert a local Torch checkpoint:
+
+```bash
+uv run --extra torch-parity sam-mlx-convert \
+  --checkpoint checkpoints/sam2.1_hiera_small.pt \
+  --model-id facebook/sam2.1-hiera-small \
+  --output checkpoints/sam2.1_hiera_small_image_segmenter.safetensors
+```
+
+The old script path remains as a compatibility wrapper:
+
+```bash
+uv run --extra torch-parity python scripts/convert_image_encoder_weights.py \
+  --checkpoint checkpoints/sam2.1_hiera_small.pt \
+  --model-id facebook/sam2.1-hiera-small
 ```
 
 ## Parity Fixtures
@@ -343,6 +372,33 @@ uv run python scripts/track_video_memory.py --frames 150 \
   --report outputs/benchmarks/video_memory_latency_150f.json
 ```
 
+Official Torch-vs-MLX full-video memory benchmark with multiple positive and
+negative clicks:
+
+```bash
+uv run --extra torch-parity python scripts/benchmark_video_memory_torch.py \
+  --model-id facebook/sam2.1-hiera-small \
+  --checkpoint checkpoints/sam2.1_hiera_small.pt \
+  --frames-dir outputs/video_memory_multiclick/small_frames_full \
+  --output-mask outputs/video_memory_multiclick/small_torch_masks_full.npy \
+  --output-video outputs/video_memory_multiclick/small_torch_overlay_full.mp4 \
+  --report outputs/benchmarks/video_memory_multiclick_small_torch_full.json \
+  --points 625 429 700 470 300 250 950 610 \
+  --labels 1 1 0 0
+
+uv run python scripts/benchmark_video_memory_mlx.py \
+  --model-id facebook/sam2.1-hiera-small \
+  --weights checkpoints/sam2.1_hiera_small_image_segmenter.safetensors \
+  --frames-dir outputs/video_memory_multiclick/small_frames_full \
+  --precompute-image-features \
+  --feature-batch-size 4 \
+  --output-mask outputs/video_memory_multiclick/small_mlx_masks_full_precompute.npy \
+  --output-video outputs/video_memory_multiclick/small_mlx_overlay_full_precompute.mp4 \
+  --report outputs/benchmarks/video_memory_multiclick_small_mlx_full_precompute.json \
+  --points 625 429 700 470 300 250 950 610 \
+  --labels 1 1 0 0
+```
+
 Current indicative numbers on this machine:
 
 - Image encoder MLX: about `81 ms/frame`
@@ -351,6 +407,13 @@ Current indicative numbers on this machine:
 - Cached prompt decode: about `4 ms`
 - Full image + prompt: about `85 ms`
 - Dog full-video memory tracker: about `269 ms/frame` on the 289-frame run
+- Dog full-video multi-click memory tracker, post-prompt propagation:
+  - Official Torch: about `331 ms/frame`
+  - MLX on-demand: about `366 ms/frame`
+  - MLX with batched image-feature precompute: about `188 ms/frame`
+- Dog full-video total for the same multi-click run:
+  - Official Torch: about `100.5 s`
+  - MLX with batched image-feature precompute: about `98.1 s`
 
 Benchmark reports are written under:
 

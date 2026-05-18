@@ -1,21 +1,34 @@
 import math
 
-import cv2
 import mlx.core as mx
 import mlx.nn as nn
-import numpy as np
 
 from sam_mlx.models.image_encoder import PositionEmbeddingSine
 from sam_mlx.models.sam_heads import Attention, LayerNorm2d
 
 
-def upsample_mask_np(mask: mx.array, size: tuple[int, int]) -> mx.array:
-    arr = np.array(mask)
-    out = np.empty((arr.shape[0], arr.shape[1], size[0], size[1]), dtype=np.float32)
-    for b in range(arr.shape[0]):
-        for c in range(arr.shape[1]):
-            out[b, c] = cv2.resize(arr[b, c].astype(np.float32), (size[1], size[0]), interpolation=cv2.INTER_LINEAR)
-    return mx.array(out)
+def _resize_1d(x: mx.array, out_size: int, axis: int) -> mx.array:
+    in_size = x.shape[axis]
+    if in_size == out_size:
+        return x
+    scale = in_size / out_size
+    src = (mx.arange(out_size, dtype=mx.float32) + 0.5) * scale - 0.5
+    lo_f = mx.floor(src)
+    lo = mx.clip(lo_f, 0, in_size - 1).astype(mx.int32)
+    hi = mx.clip(lo_f + 1, 0, in_size - 1).astype(mx.int32)
+    w = (src - lo_f).astype(x.dtype)
+
+    lo_vals = mx.take(x, lo, axis=axis)
+    hi_vals = mx.take(x, hi, axis=axis)
+    shape = [1] * x.ndim
+    shape[axis] = out_size
+    w = w.reshape(shape)
+    return lo_vals * (1.0 - w) + hi_vals * w
+
+
+def upsample_mask(mask: mx.array, size: tuple[int, int]) -> mx.array:
+    x = _resize_1d(mask, size[0], axis=2)
+    return _resize_1d(x, size[1], axis=3)
 
 
 class MaskDownSampler(nn.Module):
@@ -107,9 +120,13 @@ class RoPEAttention(Attention):
     def __init__(self, embedding_dim: int = 256, num_heads: int = 1, downsample_rate: int = 1, kv_in_dim: int | None = None, rope_k_repeat: bool = False):
         super().__init__(embedding_dim, num_heads, downsample_rate=downsample_rate, kv_in_dim=kv_in_dim)
         self.rope_k_repeat = rope_k_repeat
+        self._rope_cache = None
 
     def __call__(self, q: mx.array, k: mx.array, v: mx.array, num_k_exclude_rope: int = 0) -> mx.array:
-        cos, sin = compute_axial_rope(self.internal_dim // self.num_heads, 64, 64)
+        if self._rope_cache is None:
+            self._rope_cache = compute_axial_rope(self.internal_dim // self.num_heads, 64, 64)
+            mx.eval(*self._rope_cache)
+        cos, sin = self._rope_cache
         q = self._separate_heads(self.q_proj(q))
         k = self._separate_heads(self.k_proj(k))
         v = self._separate_heads(self.v_proj(v))

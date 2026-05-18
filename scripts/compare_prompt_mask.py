@@ -26,12 +26,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference", type=Path, default=ROOT / "data/torch_prompt_mask.npz")
     parser.add_argument("--weights", type=Path, default=ROOT / "checkpoints/sam2.1_hiera_small_image_segmenter.safetensors")
+    parser.add_argument("--model-id")
     parser.add_argument("--output", type=Path, default=ROOT / "outputs/parity/prompt_mask_parity.json")
     parser.add_argument("--atol", type=float, default=5e-4)
     args = parser.parse_args()
 
     ref = np.load(args.reference)
-    model = load_image_segmenter(args.weights)
+    if args.model_id is None and args.reference.with_suffix(".json").exists():
+        meta = json.loads(args.reference.with_suffix(".json").read_text())
+        args.model_id = meta.get("model_id")
+    model = load_image_segmenter(args.weights, model_id=args.model_id)
     out = model(
         mx.array(ref["pixel_values"]),
         mx.array(ref["point_coords"]),

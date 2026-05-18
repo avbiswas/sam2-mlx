@@ -2,14 +2,15 @@ import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
 
+from sam_mlx.config import SAM2_1_HIERA_SMALL_IMAGE_ENCODER, Sam2ImageEncoderConfig
 from sam_mlx.models.image_encoder import Sam2ImageEncoder
-from sam_mlx.models.memory import MemoryAttention, MemoryEncoder, upsample_mask_np
+from sam_mlx.models.memory import MemoryAttention, MemoryEncoder, upsample_mask
 from sam_mlx.models.sam_heads import MaskDecoder, PromptEncoder, SamMLP
 
 
 class Sam2ImageSegmenter(Sam2ImageEncoder):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, config: Sam2ImageEncoderConfig = SAM2_1_HIERA_SMALL_IMAGE_ENCODER):
+        super().__init__(config=config)
         self.sam_prompt_encoder = PromptEncoder()
         self.sam_mask_decoder = MaskDecoder()
         self.memory_encoder = MemoryEncoder()
@@ -82,7 +83,7 @@ class Sam2ImageSegmenter(Sam2ImageEncoder):
         return obj_ptr + (1 - is_obj) * self.no_obj_ptr
 
     def encode_memory(self, vision_features: mx.array, low_res_mask: mx.array, object_score_logits: mx.array, is_mask_from_points: bool = False) -> dict:
-        high_res = upsample_mask_np(low_res_mask.astype(mx.float32), (1024, 1024))
+        high_res = upsample_mask(low_res_mask.astype(mx.float32), (1024, 1024))
         if is_mask_from_points:
             mask_for_mem = (high_res > 0).astype(mx.float32)
         else:

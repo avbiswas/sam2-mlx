@@ -72,6 +72,7 @@ class PromptEncoder(nn.Module):
         self.not_a_point_embed = nn.Embedding(1, embed_dim)
         self.no_mask_embed = nn.Embedding(1, embed_dim)
         self.mask_input_size = (4 * image_embedding_size[0], 4 * image_embedding_size[1])
+        self._dense_pe_cache = None
         self.mask_downscaling_0 = nn.Conv2d(1, mask_in_chans // 4, kernel_size=2, stride=2)
         self.mask_downscaling_1 = LayerNorm2d(mask_in_chans // 4)
         self.mask_downscaling_3 = nn.Conv2d(mask_in_chans // 4, mask_in_chans, kernel_size=2, stride=2)
@@ -79,7 +80,10 @@ class PromptEncoder(nn.Module):
         self.mask_downscaling_6 = nn.Conv2d(mask_in_chans, embed_dim, kernel_size=1)
 
     def get_dense_pe(self) -> mx.array:
-        return self.pe_layer(self.image_embedding_size)[None, ...]
+        if self._dense_pe_cache is None:
+            self._dense_pe_cache = self.pe_layer(self.image_embedding_size)[None, ...]
+            mx.eval(self._dense_pe_cache)
+        return self._dense_pe_cache
 
     def _embed_points(self, points: mx.array, labels: mx.array, pad: bool) -> mx.array:
         points = points + 0.5

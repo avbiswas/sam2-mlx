@@ -75,6 +75,14 @@ def _load_video_frames(video_path: str | Path, image_size: int = 1024) -> tuple[
     return pixels, height, width
 
 
+def _slice_encoded(encoded: dict, index: int) -> dict:
+    return {
+        "vision_features": encoded["vision_features"][index : index + 1],
+        "vision_pos_enc": [pos[index : index + 1] for pos in encoded["vision_pos_enc"]],
+        "high_res_features": [feat[index : index + 1] for feat in encoded["high_res_features"]],
+    }
+
+
 def _original_to_sam(points: np.ndarray, width: int, height: int, image_size: int = 1024) -> np.ndarray:
     out = points.astype(np.float32).copy()
     out[:, 0] *= image_size / width
@@ -82,15 +90,20 @@ def _original_to_sam(points: np.ndarray, width: int, height: int, image_size: in
     return out
 
 
-def _best_low_mask(out: dict) -> tuple[np.ndarray, int]:
-    low = np.array(out["low_res_masks"])
-    ious = np.array(out["ious"])
-    idx = int(np.argmax(ious[0])) if ious.shape[1] > 1 else 0
-    return low[:, idx : idx + 1], idx
+def _best_low_mask(out: dict) -> mx.array:
+    low = out["low_res_masks"]
+    ious = out["ious"]
+    if ious.shape[1] <= 1:
+        return low[:, :1]
+    best = mx.argmax(ious, axis=1)
+    gather_idx = best.reshape(-1, 1, 1, 1)
+    gather_idx = mx.broadcast_to(gather_idx, (low.shape[0], 1, low.shape[2], low.shape[3]))
+    return mx.take_along_axis(low, gather_idx, axis=1)
 
 
 def _video_res_logits(low: np.ndarray, width: int, height: int) -> np.ndarray:
-    return cv2.resize(low[0, 0].astype(np.float32), (width, height), interpolation=cv2.INTER_LINEAR)[None, None]
+    low_np = np.array(low)
+    return cv2.resize(low_np[0, 0].astype(np.float32), (width, height), interpolation=cv2.INTER_LINEAR)[None, None]
 
 
 class SAM2VideoPredictor:
@@ -106,6 +119,7 @@ class SAM2VideoPredictor:
         self,
         model: Sam2ImageSegmenter | None = None,
         checkpoint: str | Path | None = None,
+        model_id: str | None = None,
         non_overlap_masks: bool = False,
         clear_non_cond_mem_around_input: bool = False,
         add_all_frames_to_correct_as_cond: bool = False,
@@ -114,7 +128,7 @@ class SAM2VideoPredictor:
         if model is None:
             if checkpoint is None:
                 checkpoint = Path("checkpoints/sam2.1_hiera_small_image_segmenter.safetensors")
-            model = load_image_segmenter(checkpoint)
+            model = load_image_segmenter(checkpoint, model_id=model_id)
         self.model = model
         self.non_overlap_masks = non_overlap_masks
         self.clear_non_cond_mem_around_input = clear_non_cond_mem_around_input
@@ -124,12 +138,12 @@ class SAM2VideoPredictor:
     def from_pretrained(cls, model_id: str, **kwargs) -> "SAM2VideoPredictor":
         path = Path(model_id)
         if path.exists():
-            return cls(checkpoint=path, **kwargs)
+            return cls(checkpoint=path, model_id=kwargs.pop("model_id", None), **kwargs)
         from huggingface_hub import hf_hub_download
 
         filename = kwargs.pop("filename", "sam2.1_hiera_small_image_segmenter.safetensors")
         checkpoint = hf_hub_download(repo_id=model_id, filename=filename)
-        return cls(checkpoint=checkpoint, **kwargs)
+        return cls(checkpoint=checkpoint, model_id=model_id, **kwargs)
 
     def init_state(
         self,
@@ -137,6 +151,8 @@ class SAM2VideoPredictor:
         offload_video_to_cpu: bool = False,
         offload_state_to_cpu: bool = False,
         async_loading_frames: bool = False,
+        precompute_image_features: bool = False,
+        feature_batch_size: int = 4,
     ) -> dict:
         pixels, video_height, video_width = _load_video_frames(video_path, image_size=self.image_size)
         state = {
@@ -145,6 +161,7 @@ class SAM2VideoPredictor:
             "offload_video_to_cpu": offload_video_to_cpu,
             "offload_state_to_cpu": offload_state_to_cpu,
             "async_loading_frames": async_loading_frames,
+            "keep_image_features": precompute_image_features,
             "video_height": video_height,
             "video_width": video_width,
             "cached_features": {},
@@ -158,8 +175,27 @@ class SAM2VideoPredictor:
             "temp_output_dict_per_obj": {},
             "frames_tracked_per_obj": {},
         }
-        self._get_image_feature(state, 0)
+        if precompute_image_features:
+            self._precompute_image_features(state, feature_batch_size=feature_batch_size)
+        else:
+            self._get_image_feature(state, 0)
         return state
+
+    def _precompute_image_features(self, inference_state: dict, feature_batch_size: int = 4) -> None:
+        batch_size = max(1, int(feature_batch_size))
+        images = inference_state["images"]
+        cached = inference_state["cached_features"]
+        for start in range(0, inference_state["num_frames"], batch_size):
+            encoded = self.model.encode_image(mx.array(images[start : start + batch_size]))
+            eval_targets = [
+                encoded["vision_features"],
+                *encoded["vision_pos_enc"],
+                *encoded["high_res_features"],
+            ]
+            mx.eval(*eval_targets)
+            batch = encoded["vision_features"].shape[0]
+            for offset in range(batch):
+                cached[start + offset] = _slice_encoded(encoded, offset)
 
     def _obj_id_to_idx(self, inference_state: dict, obj_id: int) -> int:
         obj_idx = inference_state["obj_id_to_idx"].get(obj_id)
@@ -181,11 +217,20 @@ class SAM2VideoPredictor:
         if cached is not None:
             return cached
         encoded = self.model.encode_image(mx.array(inference_state["images"][frame_idx : frame_idx + 1]))
-        inference_state["cached_features"] = {frame_idx: encoded}
+        eval_targets = [
+            encoded["vision_features"],
+            *encoded["vision_pos_enc"],
+            *encoded["high_res_features"],
+        ]
+        mx.eval(*eval_targets)
+        if inference_state.get("keep_image_features"):
+            inference_state["cached_features"][frame_idx] = encoded
+        else:
+            inference_state["cached_features"] = {frame_idx: encoded}
         return encoded
 
-    def _encode_memory(self, encoded: dict, low: np.ndarray, out: dict, frame_idx: int, is_mask_from_points: bool) -> dict:
-        mem = self.model.encode_memory(encoded["vision_features"], mx.array(low), out["object_score_logits"], is_mask_from_points=is_mask_from_points)
+    def _encode_memory(self, encoded: dict, low: mx.array, out: dict, frame_idx: int, is_mask_from_points: bool) -> dict:
+        mem = self.model.encode_memory(encoded["vision_features"], low, out["object_score_logits"], is_mask_from_points=is_mask_from_points)
         mx.eval(mem["vision_features"], mem["vision_pos_enc"])
         return {
             "maskmem_features": mem["vision_features"],
@@ -201,7 +246,6 @@ class SAM2VideoPredictor:
             mx.array(labels[None].astype(np.int32)),
             multimask_output=True,
         )
-        mx.eval(out["low_res_masks"], out["ious"], out["obj_ptr"], out["object_score_logits"])
         return out
 
     def _predict_tracked(
@@ -227,11 +271,10 @@ class SAM2VideoPredictor:
             conditioned_encoded,
             coords,
             labels,
-            mask_input=mx.array(prev_low.astype(np.float32)) if prev_low is not None else None,
+            mask_input=prev_low if prev_low is not None else None,
             multimask_output=False,
             add_no_mem_embed=False,
         )
-        mx.eval(out["low_res_masks"], out["ious"], out["obj_ptr"], out["object_score_logits"])
         return out
 
     def _run_single_frame_inference(
@@ -251,7 +294,7 @@ class SAM2VideoPredictor:
             out = self._predict_initial(encoded, point_inputs["point_coords"], point_inputs["point_labels"])
         else:
             out = self._predict_tracked(encoded, obj_output_dict, frame_idx, point_inputs=point_inputs, prev_low=prev_low, reverse=reverse)
-        low, _ = _best_low_mask(out)
+        low = _best_low_mask(out)
         current_out = {
             "pred_masks": low,
             "obj_ptr": out["obj_ptr"],
@@ -262,6 +305,7 @@ class SAM2VideoPredictor:
         if run_mem_encoder:
             memory = self._encode_memory(encoded, low, out, frame_idx, is_mask_from_points=(point_inputs is not None))
             current_out.update(memory)
+        mx.eval(current_out["pred_masks"], current_out["obj_ptr"], current_out["object_score_logits"])
         return current_out
 
     def _output_masks(self, inference_state: dict, outputs_by_obj: list[dict | None]) -> np.ndarray:
@@ -314,7 +358,7 @@ class SAM2VideoPredictor:
         storage_key = "cond_frame_outputs" if is_cond else "non_cond_frame_outputs"
         obj_output_dict = inference_state["output_dict_per_obj"][obj_idx]
         prev_out = obj_output_dict["cond_frame_outputs"].get(frame_idx) or obj_output_dict["non_cond_frame_outputs"].get(frame_idx)
-        prev_low = np.clip(prev_out["pred_masks"], -32.0, 32.0) if prev_out is not None else None
+        prev_low = mx.clip(prev_out["pred_masks"], -32.0, 32.0) if prev_out is not None else None
         out = self._run_single_frame_inference(inference_state, obj_idx, frame_idx, is_init_cond_frame, point_inputs, reverse, prev_low=prev_low, run_mem_encoder=True)
         obj_output_dict[storage_key][frame_idx] = out
         if storage_key == "cond_frame_outputs":
@@ -332,9 +376,10 @@ class SAM2VideoPredictor:
         low = cv2.resize(mask, (256, 256), interpolation=cv2.INTER_LINEAR)[None, None]
         low = np.where(low >= 0.5, 20.0, -20.0).astype(np.float32)
         encoded = self._get_image_feature(inference_state, frame_idx)
-        out = {"low_res_masks": mx.array(low), "obj_ptr": self.model.no_obj_ptr, "object_score_logits": mx.ones((1, 1))}
-        memory = self._encode_memory(encoded, low, out, frame_idx, is_mask_from_points=True)
-        current_out = {"pred_masks": low, "object_score_logits": out["object_score_logits"], "obj_ptr": out["obj_ptr"], **memory}
+        low_mx = mx.array(low)
+        out = {"low_res_masks": low_mx, "obj_ptr": self.model.no_obj_ptr, "object_score_logits": mx.ones((1, 1))}
+        memory = self._encode_memory(encoded, low_mx, out, frame_idx, is_mask_from_points=True)
+        current_out = {"pred_masks": low_mx, "object_score_logits": out["object_score_logits"], "obj_ptr": out["obj_ptr"], **memory}
         tracked = inference_state["frames_tracked_per_obj"][obj_idx]
         is_cond = frame_idx not in tracked or self.add_all_frames_to_correct_as_cond
         storage_key = "cond_frame_outputs" if is_cond else "non_cond_frame_outputs"

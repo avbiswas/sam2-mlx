@@ -14,9 +14,14 @@ class PositionEmbeddingSine(nn.Module):
         self.temperature = temperature
         self.normalize = normalize
         self.scale = 2 * math.pi
+        self._cache = {}
 
     def __call__(self, x: mx.array) -> mx.array:
         b, _, h, w = x.shape
+        key = (b, h, w, str(x.dtype))
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
         y = mx.arange(1, h + 1, dtype=mx.float32).reshape(1, h, 1)
         x_pos = mx.arange(1, w + 1, dtype=mx.float32).reshape(1, 1, w)
         y = mx.broadcast_to(y, (b, h, w))
@@ -31,7 +36,10 @@ class PositionEmbeddingSine(nn.Module):
         pos_y = y[..., None] / dim_t
         pos_x = mx.stack([mx.sin(pos_x[..., 0::2]), mx.cos(pos_x[..., 1::2])], axis=4).reshape(b, h, w, -1)
         pos_y = mx.stack([mx.sin(pos_y[..., 0::2]), mx.cos(pos_y[..., 1::2])], axis=4).reshape(b, h, w, -1)
-        return mx.concatenate([pos_y, pos_x], axis=3).transpose(0, 3, 1, 2)
+        out = mx.concatenate([pos_y, pos_x], axis=3).transpose(0, 3, 1, 2).astype(x.dtype)
+        mx.eval(out)
+        self._cache[key] = out
+        return out
 
 
 def upsample_nearest_2x(x: mx.array) -> mx.array:

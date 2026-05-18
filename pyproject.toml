@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 sam-mlx = "sam_mlx:main"
+sam-mlx-convert = "sam_mlx.convert:main"
 
 [project.optional-dependencies]
 torch-parity = [

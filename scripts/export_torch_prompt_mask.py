@@ -18,10 +18,38 @@ from omegaconf import OmegaConf
 from sam_mlx.preprocess import preprocess_video
 
 
-def build_model(checkpoint: Path):
+MODEL_ID_TO_CONFIG = {
+    "facebook/sam2.1-hiera-tiny": "sam2.1/sam2.1_hiera_t.yaml",
+    "facebook/sam2.1-hiera-small": "sam2.1/sam2.1_hiera_s.yaml",
+    "facebook/sam2.1-hiera-base-plus": "sam2.1/sam2.1_hiera_b+.yaml",
+    "facebook/sam2.1-hiera-large": "sam2.1/sam2.1_hiera_l.yaml",
+    "sam2.1_hiera_tiny": "sam2.1/sam2.1_hiera_t.yaml",
+    "sam2.1_hiera_small": "sam2.1/sam2.1_hiera_s.yaml",
+    "sam2.1_hiera_base_plus": "sam2.1/sam2.1_hiera_b+.yaml",
+    "sam2.1_hiera_large": "sam2.1/sam2.1_hiera_l.yaml",
+}
+
+
+def infer_model_id(checkpoint: Path) -> str:
+    stem = checkpoint.stem
+    for key in MODEL_ID_TO_CONFIG:
+        if key in stem:
+            return key
+    if "tiny" in stem:
+        return "sam2.1_hiera_tiny"
+    if "small" in stem:
+        return "sam2.1_hiera_small"
+    if "base_plus" in stem or "b+" in stem:
+        return "sam2.1_hiera_base_plus"
+    if "large" in stem:
+        return "sam2.1_hiera_large"
+    raise ValueError(f"Could not infer model id from checkpoint name: {checkpoint}")
+
+
+def build_model(checkpoint: Path, model_id: str):
     config_dir = SAM2_REPO / "sam2" / "configs"
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-        cfg = compose(config_name="sam2.1/sam2.1_hiera_s.yaml")
+        cfg = compose(config_name=MODEL_ID_TO_CONFIG[model_id])
     OmegaConf.resolve(cfg)
     model = instantiate(cfg.model, _recursive_=True)
     model.load_state_dict(torch.load(checkpoint, map_location="cpu", weights_only=True)["model"])
@@ -33,6 +61,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--video", type=Path, default=ROOT / "third_party/sam2/demo/data/gallery/01_dog.mp4")
     parser.add_argument("--checkpoint", type=Path, default=ROOT / "checkpoints/sam2.1_hiera_small.pt")
+    parser.add_argument("--model-id")
     parser.add_argument("--output", type=Path, default=ROOT / "data/torch_prompt_mask.npz")
     parser.add_argument("--point", nargs=2, type=float, default=(588.0, 626.0))
     parser.add_argument("--label", type=int, default=1)
@@ -42,7 +71,8 @@ def main():
     pixels = preprocess_video(args.video, limit=1)
     point_coords = np.array([[args.point]], dtype=np.float32)
     point_labels = np.array([[args.label]], dtype=np.int64)
-    model = build_model(args.checkpoint)
+    model_id = args.model_id or infer_model_id(args.checkpoint)
+    model = build_model(args.checkpoint, model_id)
 
     with torch.inference_mode():
         backbone_out = model.forward_image(torch.from_numpy(pixels))
@@ -78,7 +108,7 @@ def main():
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez(args.output, **arrays)
-    meta = {"video": str(args.video), "point": list(args.point), "keys": {k: list(v.shape) for k, v in arrays.items()}}
+    meta = {"video": str(args.video), "checkpoint": str(args.checkpoint), "model_id": model_id, "point": list(args.point), "keys": {k: list(v.shape) for k, v in arrays.items()}}
     args.output.with_suffix(".json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta, indent=2))
 
