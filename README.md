@@ -32,6 +32,97 @@ implemented behavior matches closely:
 - `clear_all_prompts_in_frame(...)`
 - `reset_state(...)`
 
+
+## Quick API
+
+```python
+import numpy as np
+
+from mlx_sam import SAM2VideoPredictor
+
+predictor = SAM2VideoPredictor.from_pretrained(
+    "avbiswas/sam2.1-hiera-small-mlx-fp32"
+)
+state = predictor.init_state("third_party/sam2/demo/data/gallery/01_dog.mp4")
+
+frame_idx, obj_ids, masks = predictor.add_new_points_or_box(
+    state,
+    frame_idx=0,
+    obj_id=1,
+    points=np.array([[625.0, 429.0]], dtype=np.float32),
+    labels=np.array([1], dtype=np.int32),
+)
+
+for frame_idx, obj_ids, masks in predictor.propagate_in_video(state):
+    # masks is a NumPy float32 array shaped O,1,H,W in original video resolution.
+    pass
+```
+
+Local checkpoint loading:
+
+```python
+from mlx_sam import SAM2VideoPredictor
+
+predictor = SAM2VideoPredictor(
+    checkpoint="checkpoints/sam2.1_hiera_small_image_segmenter.safetensors"
+)
+```
+
+## Image Segmentation
+
+Run one prompted frame and write an overlay:
+
+```bash
+uv run python scripts/predict_image_mask.py \
+  --point 500 610 \
+  --output-video outputs/image_prompt_overlay.mp4 \
+  --output-mask outputs/image_prompt_mask.npy
+```
+
+Coordinates are in the resized `1024x1024` SAM input space.
+
+## Video Tracking
+
+SAM2 memory tracker:
+
+```bash
+uv run python scripts/track_video_memory.py --frames 289 \
+  --point 500 610 \
+  --output-video outputs/dog_memory_overlay_full_v3.mp4 \
+  --output-mask outputs/dog_memory_masks_full_v3.npy \
+  --report outputs/benchmarks/dog_memory_latency_full_v3.json
+```
+
+The current memory tracker uses:
+
+- first-frame point, box, or mask prompts
+- SAM2 memory encoder and memory attention
+- object pointers
+- dynamic multimask fallback on unstable single-mask tracking outputs
+- conditioning-frame memory plus SAM2-style frame-indexed temporal memory
+  selection
+- click-frame masks binarized before memory encoding, matching the official
+  postprocessing path
+- shared image features for multi-object tracking
+- forward, backward, and bidirectional correction replay
+
+## Overlay Utility
+
+Render masks onto a video:
+
+```bash
+uv run python scripts/overlay_masks.py \
+  --masks outputs/dog_memory_masks_full_v3.npy \
+  --output outputs/dog_memory_overlay_from_masks.mp4
+```
+
+The overlay script accepts `.npy` or `.npz` masks shaped `T,H,W` or `T,1,H,W`.
+Synthetic overlays are only for writer smoke tests and require:
+
+```bash
+uv run python scripts/overlay_masks.py --synthetic-smoke-test
+```
+
 ## Benchmarks
 
 Current indicative results on this machine with `facebook/sam2.1-hiera-small`.
@@ -287,96 +378,6 @@ third_party/sam2
 references/mlx-vlm
 ```
 
-## Quick API
-
-```python
-import numpy as np
-
-from mlx_sam import SAM2VideoPredictor
-
-predictor = SAM2VideoPredictor.from_pretrained(
-    "avbiswas/sam2.1-hiera-small-mlx-fp32"
-)
-state = predictor.init_state("third_party/sam2/demo/data/gallery/01_dog.mp4")
-
-frame_idx, obj_ids, masks = predictor.add_new_points_or_box(
-    state,
-    frame_idx=0,
-    obj_id=1,
-    points=np.array([[625.0, 429.0]], dtype=np.float32),
-    labels=np.array([1], dtype=np.int32),
-)
-
-for frame_idx, obj_ids, masks in predictor.propagate_in_video(state):
-    # masks is a NumPy float32 array shaped O,1,H,W in original video resolution.
-    pass
-```
-
-Local checkpoint loading:
-
-```python
-from mlx_sam import SAM2VideoPredictor
-
-predictor = SAM2VideoPredictor(
-    checkpoint="checkpoints/sam2.1_hiera_small_image_segmenter.safetensors"
-)
-```
-
-## Image Segmentation
-
-Run one prompted frame and write an overlay:
-
-```bash
-uv run python scripts/predict_image_mask.py \
-  --point 500 610 \
-  --output-video outputs/image_prompt_overlay.mp4 \
-  --output-mask outputs/image_prompt_mask.npy
-```
-
-Coordinates are in the resized `1024x1024` SAM input space.
-
-## Video Tracking
-
-SAM2 memory tracker:
-
-```bash
-uv run python scripts/track_video_memory.py --frames 289 \
-  --point 500 610 \
-  --output-video outputs/dog_memory_overlay_full_v3.mp4 \
-  --output-mask outputs/dog_memory_masks_full_v3.npy \
-  --report outputs/benchmarks/dog_memory_latency_full_v3.json
-```
-
-The current memory tracker uses:
-
-- first-frame point, box, or mask prompts
-- SAM2 memory encoder and memory attention
-- object pointers
-- dynamic multimask fallback on unstable single-mask tracking outputs
-- conditioning-frame memory plus SAM2-style frame-indexed temporal memory
-  selection
-- click-frame masks binarized before memory encoding, matching the official
-  postprocessing path
-- shared image features for multi-object tracking
-- forward, backward, and bidirectional correction replay
-
-## Overlay Utility
-
-Render masks onto a video:
-
-```bash
-uv run python scripts/overlay_masks.py \
-  --masks outputs/dog_memory_masks_full_v3.npy \
-  --output outputs/dog_memory_overlay_from_masks.mp4
-```
-
-The overlay script accepts `.npy` or `.npz` masks shaped `T,H,W` or `T,1,H,W`.
-Synthetic overlays are only for writer smoke tests and require:
-
-```bash
-uv run python scripts/overlay_masks.py --synthetic-smoke-test
-```
-
 ## Convert Weights
 
 Convert from Hugging Face:
@@ -445,62 +446,9 @@ Covered scenarios:
 - `cross_frame_corrections`
 - `bidirectional_middle`
 
-Current MLX-vs-Torch feature benchmark results on the 130-frame dog-gallery
-fixture:
-
-| Scenario | Mean IoU | Presence |
-| --- | ---: | ---: |
-| `multi_object` | `0.973` | `260 / 260` |
-| `box_prompt` | `0.953` | `129 / 130` |
-| `negative_clicks` | `0.972` | `130 / 130` |
-| `cross_frame_corrections` | `0.974` | `130 / 130` |
-| `bidirectional_middle` | `0.924` | `128 / 130` |
-
-On `02_cups.mp4`, the same bidirectional benchmark with a center-cup prompt at
-frame 120 is tighter:
-
-- `bidirectional_middle` mean IoU: `0.979`
-- Presence: `130 / 130`
-- Report: `outputs/cups_feature_benchmarks_130f/bidirectional_middle_mlx_vs_torch.json`
-- Overlay: `outputs/cups_feature_benchmarks_130f/bidirectional_middle_mlx_overlay.mp4`
-
-Feature reports and inspection overlays are written under:
-
-```text
-outputs/feature_benchmarks_130f/
-```
-
-## Parity Validation
-
-Parity is used as a guardrail, not as the main product surface. The current
-full-video dog run compares MLX against the official Torch `SAM2VideoPredictor`
-on all 289 frames:
-
-- Mean mask IoU over all frames: about `0.977`
-- Median mask IoU on non-empty Torch frames: about `0.979`
-- Presence match: `289 / 289` frames
-- Official Torch overlay: `outputs/torch_sam2_dog_overlay_full_twitter.mp4`
-- MLX overlay: `outputs/dog_memory_overlay_full_v3_twitter.mp4`
-- Comparison report: `outputs/benchmarks/dog_memory_mlx_vs_torch_full_v3.json`
-
-Image and prompt parity fixtures:
-
-```bash
-uv run --extra torch-parity python scripts/export_torch_image_embeddings.py --frames 2
-uv run python scripts/compare_image_embeddings.py
-
-uv run --extra torch-parity python scripts/export_torch_prompt_mask.py
-uv run python scripts/compare_prompt_mask.py
-```
 
 Current low-level parity results:
 
 - Image `vision_features` max abs error: about `1.63e-05`
 - Prompted low-res masks max abs error: about `4.67e-05`
 - Prompted IoU max abs error: about `4.77e-07`
-
-Reports are written under:
-
-```text
-outputs/parity/
-```
