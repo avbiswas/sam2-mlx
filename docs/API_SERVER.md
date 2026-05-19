@@ -66,9 +66,9 @@ Request body:
 ```json
 {
   "session_id": "...",
-  "model_id": "avbiswas/sam2.1-hiera-small-mlx-4bit",
+  "model_id": "avbiswas/sam2.1-hiera-base-plus-mlx-8bit",
   "frame_idx": 42,
-  "points": [{"x": 640.0, "y": 360.0, "label": 1}],
+  "points": [{"x": 640.0, "y": 360.0, "label": 1, "obj_id": 1}],
   "image_size": 768,
   "color": "#ff1ac2",
   "memory_dtype": "bfloat16",
@@ -88,9 +88,9 @@ Request body:
 ```json
 {
   "session_id": "...",
-  "model_id": "avbiswas/sam2.1-hiera-small-mlx-4bit",
+  "model_id": "avbiswas/sam2.1-hiera-base-plus-mlx-8bit",
   "frame_idx": 42,
-  "points": [{"x": 640.0, "y": 360.0, "label": 1}],
+  "points": [{"x": 640.0, "y": 360.0, "label": 1, "obj_id": 1}],
   "direction": "both",
   "yield_every": 10,
   "frame_step": 2,
@@ -120,6 +120,12 @@ It contains:
 
 - `masks`: mask logits for processed frames.
 - `frame_indices`: original video frame indexes for each mask.
+
+Point grouping follows SAM2 semantics: points with the same `obj_id` are prompts
+for the same object, and different `obj_id` values create separate tracked
+objects. Label `1` is a positive point and label `0` is a negative point for
+that same object. The demo frontend renders different object mask channels with
+different colors.
 
 ### `GET /api/overlay_frame/{session_id}/{frame_idx}`
 

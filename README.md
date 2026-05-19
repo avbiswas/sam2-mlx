@@ -11,6 +11,8 @@ PyTorch.
 
 https://github.com/user-attachments/assets/0946cad0-8af8-4efc-b504-f7416083d64c
 
+https://github.com/user-attachments/assets/868b1156-6bc2-4ffd-ad1a-0971761a45d7
+
 ## What You Can Do
 
 - Segment an image from points or boxes.
@@ -180,7 +182,8 @@ http://127.0.0.1:7861
 
 The frontend is a small demo client for the local API server. It lets you upload
 a video, add positive and negative points, and run forward, backward, or
-bidirectional propagation. The API server is documented in
+bidirectional propagation. It defaults to
+`avbiswas/sam2.1-hiera-base-plus-mlx-8bit`. The API server is documented in
 [docs/API_SERVER.md](docs/API_SERVER.md).
 
 See [scripts/README.md](scripts/README.md) for benchmark commands, temporal

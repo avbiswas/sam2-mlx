@@ -18,7 +18,7 @@ dependencies = [
 
 [project.scripts]
 mlx-sam = "mlx_sam:main"
-mlx-sam-app = "mlx_sam.app:main"
+mlx-sam-app = "mlx_sam.server:main"
 mlx-sam-convert = "mlx_sam.convert:main"
 
 [project.optional-dependencies]

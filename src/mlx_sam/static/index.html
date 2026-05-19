@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mlx-sam lab</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <h1>mlx-sam lab</h1>
+      <label>Video</label>
+      <input id="videoFile" type="file" accept="video/*" />
+      <button id="uploadBtn" style="margin-top:10px">Load video</button>
+
+      <label>Model</label>
+      <input id="modelId" value="avbiswas/sam2.1-hiera-base-plus-mlx-8bit" />
+
+      <div class="row">
+        <div>
+          <label>Frame</label>
+          <input id="frameIdx" type="number" value="0" min="0" />
+        </div>
+        <div>
+          <label>Yield every</label>
+          <input id="yieldEvery" type="number" value="10" min="1" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Image size</label>
+          <input id="imageSize" type="number" value="768" min="256" step="16" />
+        </div>
+        <div>
+          <label>Direction</label>
+          <select id="direction">
+            <option value="forward">Forward</option>
+            <option value="backward">Backward</option>
+            <option value="both">Both</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Mask color</label>
+          <input id="maskColor" type="color" value="#ff1ac2" />
+        </div>
+        <div>
+          <label>Temporal jump</label>
+          <input id="frameStep" type="number" value="2" min="1" step="1" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Precompute video</label>
+          <select id="precomputeVideo">
+            <option value="false" selected>Off</option>
+            <option value="true">On</option>
+          </select>
+        </div>
+        <div>
+          <label>Feature batch</label>
+          <input id="featureBatchSize" type="number" value="4" min="1" step="1" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Memory dtype</label>
+          <select id="memoryDtype">
+            <option value="">fp32</option>
+            <option value="bfloat16" selected>bfloat16</option>
+            <option value="float16">float16</option>
+          </select>
+        </div>
+        <div>
+          <label>Attention dtype</label>
+          <select id="attentionDtype">
+            <option value="">fp32</option>
+            <option value="bfloat16" selected>bfloat16</option>
+            <option value="float16">float16</option>
+          </select>
+        </div>
+      </div>
+
+      <label>Point tool</label>
+      <div class="segmented">
+        <button id="posBtn" class="secondary" data-mode="pos">+ Point</button>
+        <button id="negBtn" class="secondary" data-mode="neg">- Point</button>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Object id</label>
+          <input id="objectId" type="number" value="1" min="1" step="1" />
+        </div>
+        <div>
+          <label>Objects</label>
+          <select id="objectSelect">
+            <option value="1">Object 1</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <button id="loadFrameBtn" class="secondary">Load frame</button>
+        <button id="clearBtn" class="secondary">Clear points</button>
+      </div>
+
+      <label>
+        <input id="overlayEnabled" type="checkbox" checked style="width:auto;margin-right:8px" />
+        Overlay
+      </label>
+
+      <button id="runBtn" style="margin-top:14px" disabled>Run segmentation</button>
+      <a id="downloadOverlayBtn" class="button disabled" href="#" download="mlx-sam-overlay.mp4" aria-disabled="true">Download overlay video</a>
+      <progress id="progress" value="0" max="1" style="margin-top:14px"></progress>
+      <div id="meta" class="meta">No video loaded.</div>
+      <div id="points" class="points"></div>
+    </aside>
+
+    <main>
+      <header>
+        <h1>Manual video segmentation</h1>
+        <div id="status" class="status">Load a video, click positive or negative points, then run.</div>
+      </header>
+      <section class="stage">
+        <div class="viewer">
+          <div class="viewer-title">
+            <span>Video</span>
+            <span><span id="toolInfo">playback</span> / <span id="promptInfo">0 points</span> / <span id="streamInfo">idle</span></span>
+          </div>
+          <div id="promptWrap" class="canvas-wrap">
+            <div class="media-layer">
+              <video id="videoPlayer" playsinline></video>
+              <img id="previewOverlay" alt="" />
+              <canvas id="canvas"></canvas>
+            </div>
+          </div>
+          <div class="playhead">
+            <button id="sourcePlayBtn" class="secondary" disabled>Play</button>
+            <input id="sourcePlayhead" type="range" min="0" max="0" value="0" disabled />
+            <span id="sourcePlayheadLabel">0</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
