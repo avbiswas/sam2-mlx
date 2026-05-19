@@ -484,7 +484,11 @@ class SAM2VideoPredictor:
         max_frame_num_to_track=None,
         reverse: bool = False,
         return_masks: bool = True,
+        frame_step: int = 1,
     ):
+        frame_step = int(frame_step)
+        if frame_step < 1:
+            raise ValueError(f"frame_step must be >= 1, got {frame_step}")
         self._propagate_preflight(inference_state)
         if start_frame_idx is None:
             start_frame_idx = min(
@@ -496,10 +500,10 @@ class SAM2VideoPredictor:
             max_frame_num_to_track = inference_state["num_frames"]
         if reverse:
             end = max(start_frame_idx - max_frame_num_to_track, 0)
-            order = range(start_frame_idx, end - 1, -1) if start_frame_idx > 0 else []
+            order = range(start_frame_idx, end - 1, -frame_step) if start_frame_idx > 0 else []
         else:
             end = min(start_frame_idx + max_frame_num_to_track, inference_state["num_frames"] - 1)
-            order = range(start_frame_idx, end + 1)
+            order = range(start_frame_idx, end + 1, frame_step)
 
         for frame_idx in order:
             outputs: list[dict | None] = []
@@ -523,6 +527,7 @@ class SAM2VideoPredictor:
         reverse: bool = False,
         yield_every: int | None = 30,
         return_full: bool = False,
+        frame_step: int = 1,
     ):
         """Yield throttled video mask events for UI or worker streaming.
 
@@ -539,6 +544,9 @@ class SAM2VideoPredictor:
         """
         if yield_every is not None and int(yield_every) < 1:
             raise ValueError(f"yield_every must be >= 1 or None, got {yield_every}")
+        frame_step = int(frame_step)
+        if frame_step < 1:
+            raise ValueError(f"frame_step must be >= 1, got {frame_step}")
         throttle = None if yield_every is None else int(yield_every)
         frame_indices: list[int] = []
         all_masks: list[np.ndarray] = []
@@ -550,6 +558,7 @@ class SAM2VideoPredictor:
             max_frame_num_to_track=max_frame_num_to_track,
             reverse=reverse,
             return_masks=True,
+            frame_step=frame_step,
         )
         for step, (frame_idx, obj_ids, masks) in enumerate(iterator):
             if return_full:

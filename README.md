@@ -163,6 +163,26 @@ snaps arbitrary prompt frames to the nearest sampled frame, propagates forward
 and backward over the sampled frames, and interpolates skipped masks. Normal
 `propagate_in_video(...)` still evaluates every frame.
 
+## Manual App
+
+Install the optional app dependencies and launch the local browser UI:
+
+```bash
+uv sync --extra app
+uv run mlx-sam-app
+```
+
+Then open:
+
+```text
+http://127.0.0.1:7861
+```
+
+The frontend is a small demo client for the local API server. It lets you upload
+a video, add positive and negative points, and run forward, backward, or
+bidirectional propagation. The API server is documented in
+[docs/API_SERVER.md](docs/API_SERVER.md).
+
 See [scripts/README.md](scripts/README.md) for benchmark commands, temporal
 downsampling experiments, quantization, conversion, parity checks, and upload
 helpers.
