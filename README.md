@@ -69,6 +69,20 @@ for frame_idx, obj_ids, masks in predictor.propagate_in_video(state):
     pass
 ```
 
+For UI or worker streaming, use `stream_in_video(...)`. It returns dictionary
+events, throttles intermediate frame events with `yield_every`, and can emit a
+final stacked mask tensor:
+
+```python
+for event in predictor.stream_in_video(state, yield_every=30, return_full=True):
+    if event["type"] == "frame":
+        frame_idx = event["frame_idx"]
+        masks = event["masks"]  # O,1,H,W for this frame
+    elif event["type"] == "final":
+        frame_indices = event["frame_indices"]  # T
+        masks = event["masks"]  # T,O,1,H,W for every processed frame
+```
+
 Local checkpoint loading works the same way:
 
 ```python

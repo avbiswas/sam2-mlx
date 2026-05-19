@@ -515,6 +515,69 @@ class SAM2VideoPredictor:
             masks = self._output_masks(inference_state, outputs) if return_masks else None
             yield frame_idx, inference_state["obj_ids"], masks
 
+    def stream_in_video(
+        self,
+        inference_state: dict,
+        start_frame_idx=None,
+        max_frame_num_to_track=None,
+        reverse: bool = False,
+        yield_every: int | None = 30,
+        return_full: bool = False,
+    ):
+        """Yield throttled video mask events for UI or worker streaming.
+
+        Frame events are dictionaries with:
+        - type: "frame"
+        - is_final: False
+        - frame_idx: source video frame index
+        - step: zero-based processed-frame counter in this propagation call
+        - obj_ids: current object ids
+        - masks: NumPy float32 array shaped O,1,H,W
+
+        If return_full is true, the last event has type "final", is_final true,
+        frame_indices for every processed frame, and masks stacked as T,O,1,H,W.
+        """
+        if yield_every is not None and int(yield_every) < 1:
+            raise ValueError(f"yield_every must be >= 1 or None, got {yield_every}")
+        throttle = None if yield_every is None else int(yield_every)
+        frame_indices: list[int] = []
+        all_masks: list[np.ndarray] = []
+        last_event: dict | None = None
+
+        iterator = self.propagate_in_video(
+            inference_state,
+            start_frame_idx=start_frame_idx,
+            max_frame_num_to_track=max_frame_num_to_track,
+            reverse=reverse,
+            return_masks=True,
+        )
+        for step, (frame_idx, obj_ids, masks) in enumerate(iterator):
+            if return_full:
+                frame_indices.append(int(frame_idx))
+                all_masks.append(masks)
+            event = {
+                "type": "frame",
+                "is_final": False,
+                "frame_idx": int(frame_idx),
+                "step": step,
+                "obj_ids": list(obj_ids),
+                "masks": masks,
+            }
+            last_event = event
+            if throttle is None or step % throttle == 0:
+                yield event
+
+        if return_full:
+            full_masks = np.stack(all_masks, axis=0) if all_masks else None
+            yield {
+                "type": "final",
+                "is_final": True,
+                "frame_idx": None,
+                "frame_indices": np.asarray(frame_indices, dtype=np.int32),
+                "obj_ids": [] if last_event is None else last_event["obj_ids"],
+                "masks": full_masks,
+            }
+
     def clear_all_prompts_in_frame(self, inference_state: dict, frame_idx: int, obj_id: int, need_output: bool = True):
         obj_idx = self._obj_id_to_idx(inference_state, obj_id)
         inference_state["point_inputs_per_obj"][obj_idx].pop(frame_idx, None)

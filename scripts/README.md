@@ -160,6 +160,11 @@ This is a preview-quality setting, not the parity default.
 Temporal downsampling is an explicit experiment path. Normal
 `propagate_in_video(...)` evaluates every frame.
 
+The public `stream_in_video(...)` API is separate from temporal downsampling:
+it throttles which frame events are yielded to a caller, but it does not skip
+model computation. Use it when an external UI or worker should receive progress
+events without receiving every mask tensor.
+
 `benchmark_video_frame_skip_mlx.py` runs SAM2 on every `k`-th frame and
 interpolates logits for skipped frames:
 
@@ -350,4 +355,3 @@ Current low-level parity results:
 - Image `vision_features` max abs error: about `1.63e-05`
 - Prompted low-res masks max abs error: about `4.67e-05`
 - Prompted IoU max abs error: about `4.77e-07`
-
