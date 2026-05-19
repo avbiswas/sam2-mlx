@@ -46,6 +46,41 @@ Generated reports live under `outputs/benchmarks/`.
 | Full dog video, total run | `100.5 s` | `94.8 s` | MLX faster end to end |
 | Raw propagation, no save/overlay/final resize | `407 ms/frame` | `287 ms/frame` | MLX `1.42x` faster |
 
+## Model Catalog
+
+Benchmarks below were run on an Apple M2 Max with 32 GB unified memory. The
+source media is `third_party/sam2/demo/data/gallery/01_dog.mp4`, a
+`1280x720`, 289-frame clip at 29.97 FPS (`9.64 s`). The fp32 speed and parity
+rows use the prompted first-frame fixture at `1024x1024` internal resolution;
+speedup is MLX full-image-plus-prompt latency versus the original Torch/MPS
+model of the same SAM2.1 family.
+
+| FP32 model | Size | Torch/MPS | MLX | Speedup | Parity vs Torch main |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `avbiswas/sam2.1-hiera-tiny-mlx` | `172.6 MiB` | `96.6 ms` | `71.3 ms` | `1.36x` | mask mean abs `1.17e-05`, IoU max abs `1.43e-06` |
+| `avbiswas/sam2.1-hiera-small-mlx` | `199.7 MiB` | `112.5 ms` | `84.5 ms` | `1.33x` | mask mean abs `8.14e-06`, IoU max abs `4.77e-07` |
+| `avbiswas/sam2.1-hiera-base-plus-mlx` | `336.4 MiB` | `203.5 ms` | `144.7 ms` | `1.41x` | mask mean abs `5.04e-06`, IoU max abs `3.49e-06` |
+| `avbiswas/sam2.1-hiera-large-mlx` | `892.2 MiB` | `433.0 ms` | `341.1 ms` | `1.27x` | mask mean abs `7.84e-06`, IoU max abs `2.50e-06` |
+
+Quantized checkpoints are intended to reduce memory footprint and distribution
+size. On current MLX kernels they should not be assumed to speed up video
+tracking; in our tests quantization primarily helps memory, not latency.
+
+| Quantized model | Size | Variant | Parity vs fp32 MLX |
+| --- | ---: | --- | --- |
+| `avbiswas/sam2.1-hiera-tiny-mlx-16bit` | `86.3 MiB` | fp16 | mask mean abs `5.43e-03`, IoU max abs `9.36e-04` |
+| `avbiswas/sam2.1-hiera-tiny-mlx-8bit` | `69.0 MiB` | int8 | mask mean abs `6.19e-02`, IoU max abs `2.80e-03` |
+| `avbiswas/sam2.1-hiera-tiny-mlx-4bit` | `49.2 MiB` | mixed-q4 | mask mean abs `6.29e-02`, IoU max abs `2.58e-03` |
+| `avbiswas/sam2.1-hiera-small-mlx-16bit` | `99.9 MiB` | fp16 | mask mean abs `8.24e-03`, IoU max abs `1.10e-03` |
+| `avbiswas/sam2.1-hiera-small-mlx-8bit` | `76.7 MiB` | int8 | mask mean abs `2.99e-02`, IoU max abs `1.90e-03` |
+| `avbiswas/sam2.1-hiera-small-mlx-4bit` | `56.4 MiB` | mixed-q4 | mask mean abs `2.87e-02`, IoU max abs `8.80e-04` |
+| `avbiswas/sam2.1-hiera-base-plus-mlx-16bit` | `168.2 MiB` | fp16 | mask mean abs `1.58e-03`, IoU max abs `8.83e-04` |
+| `avbiswas/sam2.1-hiera-base-plus-mlx-8bit` | `124.6 MiB` | int8 | mask mean abs `2.24e-02`, IoU max abs `8.98e-03` |
+| `avbiswas/sam2.1-hiera-base-plus-mlx-4bit` | `95.8 MiB` | mixed-q4 | mask mean abs `2.70e-02`, IoU max abs `6.11e-03` |
+| `avbiswas/sam2.1-hiera-large-mlx-16bit` | `446.2 MiB` | fp16 | mask mean abs `2.11e-03`, IoU max abs `8.34e-05` |
+| `avbiswas/sam2.1-hiera-large-mlx-8bit` | `300.2 MiB` | int8 | mask mean abs `1.57e-02`, IoU max abs `2.71e-03` |
+| `avbiswas/sam2.1-hiera-large-mlx-4bit` | `249.7 MiB` | mixed-q4 | mask mean abs `1.56e-02`, IoU max abs `2.61e-03` |
+
 The fastest video path uses batched image-feature precompute and bfloat16 memory
 attention:
 
